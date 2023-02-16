@@ -127,6 +127,49 @@ classdef ecomoInterface < handle
             obj = obj.exportData( Res );
         end % eventCbRun
 
+        function plotBestSimulation( obj )
+            %--------------------------------------------------------------
+            % Plot the best simulation results
+            %
+            % obj.plotBestSimulation();
+            %--------------------------------------------------------------
+            D = obj.Src.Design;
+            Idx = all( obj.B.Xbest == D, 2 );
+            Ptr = find( Idx == 1, 1, "last" );
+            FSim = obj.FM( Ptr );                                           % Retrieve the best simulation
+            %--------------------------------------------------------------
+            % Now plot the results
+            %--------------------------------------------------------------
+            figure;
+            Ax( 4 ) = subplot(2,2,4);
+            for Q = 1:4
+                Ax( Q ) = subplot(2,2,Q);  
+                Ax( Q ).NextPlot = "add";
+                grid on;
+                Ax( Q ).GridAlpha = 0.5;
+                Ax( Q ).GridLineStyle = ":";
+                if Q == 3
+                    %------------------------------------------------------
+                    % Add the identification data
+                    %------------------------------------------------------
+                    Ax( Q ).NextPlot = "add";
+                    plot( obj.Data.T_g_out, obj.Data.deltaP, 'g+');
+                end
+            end
+            plot( Ax( 1 ), FSim.ModelPara.k_d(:,1), FSim.ModelPara.k_d(:,2), '-' );     % Thermal conductivity
+            plot( Ax( 2 ), FSim.ModelPara.rho_d(:,1), FSim.ModelPara.rho_d(:,2), '-');  % Deposit density
+            plot( Ax( 3 ), FSim.T_out_L_degC, FSim.deltaPre_L_kPa, 's' );               % Temperature out versus delta pressure
+            plot( Ax( 4 ), 1000 * FSim.phi_soot_tn1, '-' );                             % Deposit layer thickness
+            xlabel( Ax( 1 ), "Axial Distance [m]");
+            ylabel( Ax( 1 ), "Deposit Thermal Conductivity [W/K/m]");
+            xlabel( Ax( 2 ), "Axial Distance [m]");
+            ylabel( Ax( 2 ), "Deposit Density [kg/m^3]");
+            xlabel( Ax( 3 ), "T_{out} [^oC]");
+            ylabel( Ax( 3 ), "\Deltap [kPa]")
+            xlabel( Ax( 4 ), "Control Volume [#]");
+            ylabel( Ax( 4 ), "\phi [mm]");
+        end % plotBestSimulation
+
         function obj = genNewQuery( obj )
             %--------------------------------------------------------------
             % Optimise the acquisition function and generate a new query.
