@@ -10,27 +10,30 @@ classdef ecomoInterface < handle
         Lh     (1,1)                                                        % Listener handle for RUN_EXPERIMENT event
         FM     (1,:)   FoulingModel                                         % ECOMO fouling model object array
         IDdata (1,1)   string                                               % Name of identification data file
-        B      (1,1)   bayesOpt                                             % bayesOpt object
+        B      (1,:)   bayesOpt = bayesOpt.empty                            % bayesOpt object
         Data   (1,1)   struct                                               % Identification training data
     end
 
     methods
-        function obj = loadIdentificationData( obj, Fname )
+        function obj = loadIdentificationData( obj, Fname, Varname )
             %--------------------------------------------------------------
             % Load the identification data file
             %
-            % obj = obj.loadIdentificationData( Fname );
+            % obj = obj.loadIdentificationData( Fname, Varname );
             %
             % Input Arguments:
             %
-            % Fname --> (string) full name (including path and extension)
-            %           of identification data file. If empty, or not found 
-            %           a gui is opened allowing the user to select the 
-            %           file manually.
+            % Fname     --> (string) full name (including path and extension)
+            %               of identification data file. If empty, or not found 
+            %               a gui is opened allowing the user to select the 
+            %               file manually.
+            % Varname   --> (string) Name of structure containing
+            %               identification data
             %--------------------------------------------------------------
             arguments
-                obj   (1,1) ecomoInterface
-                Fname (1,1) string         = ""
+                obj     (1,1) ecomoInterface
+                Fname   (1,:) string         = string.empty
+                Varname (1,:) string         = "EGRVars"
             end
             if ( nargin < 2 ) || ( exist( Fname, "file" ) ~= 2 )
                 [ Fname, Path ] = uigetfile( ".mat",...
@@ -41,8 +44,8 @@ classdef ecomoInterface < handle
             Ok = ( exist( Fname, "file" ) == 2 );
             assert( Ok, 'File "%s" not found', Fname );
             obj.IDdata = Fname;
-            load( obj.IDdata, "EGRVars" );
-            obj.Data = EGRVars;
+            load( obj.IDdata,  Varname );
+            obj.Data = eval( Varname );
         end % loadIdentificationData
 
         function obj = addRunExperimentListener( obj, Src )
@@ -156,6 +159,9 @@ classdef ecomoInterface < handle
                     plot( obj.Data.T_g_out, obj.Data.deltaP, 'g+');
                 end
             end
+            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            % To Do : Generalise the plotting
+            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             plot( Ax( 1 ), FSim.ModelPara.k_d(:,1), FSim.ModelPara.k_d(:,2), '-' );     % Thermal conductivity
             plot( Ax( 2 ), FSim.ModelPara.rho_d(:,1), FSim.ModelPara.rho_d(:,2), '-');  % Deposit density
             plot( Ax( 3 ), FSim.T_out_L_degC, FSim.deltaPre_L_kPa, 's' );               % Temperature out versus delta pressure
@@ -166,6 +172,7 @@ classdef ecomoInterface < handle
             ylabel( Ax( 2 ), "Deposit Density [kg/m^3]");
             xlabel( Ax( 3 ), "T_{out} [^oC]");
             ylabel( Ax( 3 ), "\Deltap [kPa]")
+            legend( Ax( 3 ), "Model", "Data" )
             xlabel( Ax( 4 ), "Control Volume [#]");
             ylabel( Ax( 4 ), "\phi [mm]");
         end % plotBestSimulation
@@ -177,8 +184,8 @@ classdef ecomoInterface < handle
             %
             % obj = obj.genNewQuery();
             %--------------------------------------------------------------
-            Lo = 0.9 * obj.B.Xlo;
-            Hi = 1.1 * obj.B.Xhi;
+            Lo = 0.5*obj.B.Xlo;
+            Hi = 1.5*obj.B.Xhi;
             obj.B = obj.B.acqFcnMaxTemplate( "lb", Lo, "ub", Hi );
         end % genNewQuery
 
@@ -190,6 +197,33 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             notify( obj, 'PROCESS_NEW_QUERY' );
         end % exportNewQuery
+
+        function L = processResiduals( obj )
+            %--------------------------------------------------------------
+            % Process the Tout and delta pressure residuals
+            %
+            % Res = obj.processResiduals();
+            %
+            % Output Arguments:
+            %
+            % L --> (double) (Nx1) vector of loglikelihood values.
+            %--------------------------------------------------------------
+            Tout = [ obj.FM( : ).T_out_L_degC ];                            % Tout predictions from the simulation
+            DeltaP = [ obj.FM( : ).deltaPre_L_kPa ];                        % Delta pressure predictions from the simulation
+            Tres = ( obj.Data.T_g_out - Tout );                             % Temperature residual matrix
+            Pres = ( obj.Data.deltaP - DeltaP );                            % pressure residual matrix
+            [ N, C ] = size( Tres );
+            %--------------------------------------------------------------
+            % Calculate normal negative loglikelihood
+            %--------------------------------------------------------------
+            L = zeros( C, 1 );
+            for Q = 1:C
+                L( Q ) = 0.5 * N * ( log( Tres( :,Q ).' * Tres( :,Q ) ) +...
+                                log( Pres( :,Q ).' * Pres( :,Q ) ) );
+                L( Q ) = N * log( 2 * pi ) + N + L( Q );
+            end
+            L = -L;
+        end % processResiduals        
     end % Ordinary methods
 
     methods ( Access = protected )
@@ -205,10 +239,12 @@ classdef ecomoInterface < handle
                 SurModel (1,1) string = "gpr"
                 AcqFcn   (1,1) string = "aei"
             end
-            BO_obj = bayesOpt( SurModel, AcqFcn );
+            if isempty( obj.B )
+                obj.B = bayesOpt( SurModel, AcqFcn );
+            end
             X = obj.makeXmatrix();
-            BO_obj = BO_obj.conDataCoding( min( X ),  max( X ) );
-            obj.B = BO_obj.setTrainingData( X, Res(:) );
+            obj.B = obj.B.conDataCoding( min( X ),  max( X ) );
+            obj.B = obj.B.setTrainingData( X, Res(:) );
         end % exportData
 
         function obj = runSimulation( obj, ModelPara, BoundCond, Options, Idx )
@@ -245,25 +281,6 @@ classdef ecomoInterface < handle
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             X = obj.Src.Design;
         end  
-         
-        function Res = processResiduals( obj )
-            %--------------------------------------------------------------
-            % Process the Tout and delta pressure residuals
-            %
-            % Res = obj.processResiduals();
-            %
-            % Output Arguments:
-            %
-            % Res --> (double) Nx2 matrix of residual data. Column 1 is the
-            %         temperature residuals and column2 the corresponding 
-            %         delta pressure residuals.
-            %--------------------------------------------------------------
-            Tout = [ obj.FM( : ).T_out_L_degC ];                            % Tout predictions from the simulation
-            DeltaP = [ obj.FM( : ).deltaPre_L_kPa ];                        % Delta pressure predictions from the simulation
-            Tres = mean( obj.Data.T_g_out - Tout ).';                       % Temperature residual
-            Pres = mean( obj.Data.deltaP - DeltaP ).';                      % pressure residual
-            Res = ( Tres.^2 + Pres.^2 );                                    % Sum the squared residual. This is the BOpt function to maximise
-        end % processResiduals
     end % private methods
 
     methods ( Access = private, Static = true )
@@ -298,7 +315,21 @@ classdef ecomoInterface < handle
                 if iscell( Val )
                     Val = cell2mat( Val ).';
                 end
-                P.( IdNames{ Q } ) = Val;
+                %----------------------------------------------------------
+                % Make sure the size of the data is correct
+                %----------------------------------------------------------
+                try
+                    %------------------------------------------------------
+                    % Match the size as a default
+                    %------------------------------------------------------
+                    Val = reshape( Val, size( P.( IdNames{ Q } ) ) );
+                    P.( IdNames{ Q } ) = Val;
+                catch
+                    %------------------------------------------------------
+                    % Overwrite if required
+                    %------------------------------------------------------
+                    P.( IdNames{ Q } ) = Val;
+                end
             end % Q
         end % parameterCheck
     end % private and static methods
