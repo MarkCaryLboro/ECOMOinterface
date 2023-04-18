@@ -139,11 +139,14 @@ classdef ecomoInterface < handle
             % 3. Loop through the data and run the requested simulations
             %--------------------------------------------------------------
             N = height( SrcObj.ParTable );
+            F = waitbar( 0, 'DoE Simulation Progress' );
             for Q = 1:N
                 if ~SrcObj.ParTable.Simulated( Q )
                     %------------------------------------------------------
                     % Only run each condition once
                     %------------------------------------------------------
+                    Msg = sprintf( 'Simulation %4.0f out of %4.0f', Q, N);
+                    waitbar( Q/N, F, Msg );
                     [ ModelPara, BoundCond ] = obj.parameterCheck( ...
                         ModelPara, BoundCond, SrcObj, Q );
                     obj = obj.runSimulation( ModelPara, BoundCond,...
@@ -151,6 +154,7 @@ classdef ecomoInterface < handle
                     SrcObj.setSimulated( Q, true );
                 end
             end % Q
+            delete( F );
             %--------------------------------------------------------------
             % Process data and export the results
             %--------------------------------------------------------------
