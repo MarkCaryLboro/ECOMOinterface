@@ -135,25 +135,25 @@ classdef ecomoInterface < handle
             % 2. Determine if all variables defined in the Parameter table
             %    in the DOE object are defined in the ModelPara structure.
             %    Add any missing fields.
-            %
             % 3. Loop through the data and run the requested simulations
             %--------------------------------------------------------------
-            N = height( SrcObj.ParTable );
+            N = find( ~SrcObj.ParTable.Simulated, height( SrcObj.ParTable));
             F = waitbar( 0, 'DoE Simulation Progress' );
-            for Q = 1:N
-                if ~SrcObj.ParTable.Simulated( Q )
-                    %------------------------------------------------------
-                    % Only run each condition once
-                    %------------------------------------------------------
-                    Msg = sprintf( 'Simulation %4.0f out of %4.0f', Q, N);
-                    waitbar( Q/N, F, Msg );
-                    [ ModelPara, BoundCond ] = obj.parameterCheck( ...
-                        ModelPara, BoundCond, SrcObj, Q );
-                    obj = obj.runSimulation( ModelPara, BoundCond,...
-                        Options, Q );
-                    SrcObj.setSimulated( Q, true );
-                end
-            end % Q
+            MaxN = max( N );
+            for Q = 1:numel( N )
+                %----------------------------------------------------------
+                % Simulate new conditions
+                %----------------------------------------------------------
+                Idx = N( Q );
+                Msg = sprintf( 'Simulation %4.0f out of %4.0f', Idx,...
+                                                                MaxN );
+                waitbar( Idx / MaxN, F, Msg );
+                [ ModelParaTmp, BoundCondTmp ] = ecomoInterface.parameterCheck( ...
+                    ModelPara, BoundCond, SrcObj, Idx );
+                obj.runSimulation( ModelParaTmp, BoundCondTmp,...
+                    Options, Idx );
+                SrcObj.setSimulated( Idx, true );
+            end % Q     
             delete( F );
             %--------------------------------------------------------------
             % Process data and export the results
@@ -280,7 +280,7 @@ classdef ecomoInterface < handle
             obj.B = obj.B.setTrainingData( X, Res(:) );
         end % exportData
 
-        function obj = runSimulation( obj, ModelPara, BoundCond, Options, Idx )
+        function runSimulation( obj, ModelPara, BoundCond, Options, Idx )
             %--------------------------------------------------------------
             % Run an ECOMO simulation
             %
@@ -316,7 +316,7 @@ classdef ecomoInterface < handle
         end  
     end % private methods
 
-    methods ( Access = private, Static = true )
+    methods ( Access = protected, Static = true )
         function [ P, Bc ] = parameterCheck( M, B, S, R )
             %--------------------------------------------------------------
             % Return 2 structures containing all the identification
@@ -398,5 +398,5 @@ classdef ecomoInterface < handle
             PidxLo = ( Lo >= 0 );
             PidxHi = ( Hi >= 0);
         end % getPositive
-    end % private and static methods
+    end % protected and static methods
 end % classdef
