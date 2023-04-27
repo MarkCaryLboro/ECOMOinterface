@@ -131,6 +131,7 @@ classdef ecomoInterface < handle
             run( SrcObj.ConfigFile );
             BoundCond.L = SrcObj.TubeLength;                                % Define length of tube
             BoundCond.D0 = SrcObj.TubeIntDia;                               % Define diameter of tube
+            BoundCond.IN_TimeSeries = obj.Data;                             % Load the identification data
             %--------------------------------------------------------------
             % 2. Determine if all variables defined in the Parameter table
             %    in the DOE object are defined in the ModelPara structure.
@@ -140,7 +141,9 @@ classdef ecomoInterface < handle
             N = find( ~SrcObj.ParTable.Simulated, height( SrcObj.ParTable));
             F = waitbar( 0, 'DoE Simulation Progress' );
             MaxN = max( N );
-            for Q = 1:numel( N )
+            Nx = numel( N );
+            FMarray = repmat( FoulingModel.empty, 1, Nx );
+            for Q = 1:Nx
                 %----------------------------------------------------------
                 % Simulate new conditions
                 %----------------------------------------------------------
@@ -150,10 +153,15 @@ classdef ecomoInterface < handle
                 waitbar( Idx / MaxN, F, Msg );
                 [ ModelParaTmp, BoundCondTmp ] = ecomoInterface.parameterCheck( ...
                     ModelPara, BoundCond, SrcObj, Idx );
-                obj.runSimulation( ModelParaTmp, BoundCondTmp,...
-                    Options, Idx );
+                FMarray( Q ) = ecomoInterface.runSimulation( ModelParaTmp,...
+                                    BoundCondTmp, Options );
                 SrcObj.setSimulated( Idx, true );
             end % Q     
+            if isempty( obj.FM )
+                obj.FM = FMarray;
+            else
+                obj.FM = [ obj.FM, FMarray ];
+            end
             delete( F );
             %--------------------------------------------------------------
             % Process data and export the results
@@ -279,24 +287,6 @@ classdef ecomoInterface < handle
             obj.B = obj.B.conDataCoding( min( X ),  max( X ) );
             obj.B = obj.B.setTrainingData( X, Res(:) );
         end % exportData
-
-        function runSimulation( obj, ModelPara, BoundCond, Options, Idx )
-            %--------------------------------------------------------------
-            % Run an ECOMO simulation
-            %
-            % obj.runSimulation( ModelPara, BoundCond, Options, Idx );
-            %
-            % Input Arguments:
-            %
-            % ModelPara --> (struct) Simulation model parameters
-            % BoundCond --> (struct) Initial conditions
-            % Options   --> (struct) Configuration options
-            % Idx       --> (double) Pointer to position in FM array
-            %--------------------------------------------------------------
-            BoundCond.IN_TimeSeries = obj.Data;
-            obj.FM( Idx ) = FoulingModel(BoundCond,ModelPara,Options);      % Define the simulation object
-            obj.FM( Idx ).run();                                            % Run the simulation
-        end % runSimulation
     end % protected methods
 
     methods ( Access = private )        
@@ -317,6 +307,22 @@ classdef ecomoInterface < handle
     end % private methods
 
     methods ( Access = protected, Static = true )
+        function FM = runSimulation( ModelPara, BoundCond, Options )
+            %--------------------------------------------------------------
+            % Run an ECOMO simulation
+            %
+            % FM = ecomoInterface.runSimulation( ModelPara, BoundCond,... 
+            %                                    Options );
+            %
+            % Input Arguments:
+            %
+            % ModelPara --> (struct) Simulation model parameters
+            % BoundCond --> (struct) Initial conditions
+            % Options   --> (struct) Configuration options
+            %--------------------------------------------------------------
+            FM = FoulingModel(BoundCond,ModelPara,Options);                 % Define the simulation object
+            FM.run();                                                       % Run the simulation
+        end % runSimulation
         function [ P, Bc ] = parameterCheck( M, B, S, R )
             %--------------------------------------------------------------
             % Return 2 structures containing all the identification
