@@ -200,24 +200,41 @@ classdef ecomoInterface < handle
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             % To Do : Generalise the plotting
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            plot( Ax( 1 ), FSim.ModelPara.k_d(:,1), FSim.ModelPara.k_d(:,2), '-' );     % Thermal conductivity
-            plot( Ax( 2 ), FSim.ModelPara.rho_d(:,1), FSim.ModelPara.rho_d(:,2), '-');  % Deposit density
-            plot( Ax( 3 ), FSim.T_out_L_degC, FSim.deltaPre_L_kPa, 's' );               % Temperature out versus delta pressure
-            plot( Ax( 4 ), 1000 * FSim.phi_soot_tn1, '-' );                             % Deposit layer thickness
+            X = FSim.ModelPara.k_d(:,1);
+            Xi = linspace( min( X ), max( X ), 1001 );
+            Y = FSim.ModelPara.k_d(:,2);
+            plot( Ax( 1 ), Xi, interp1( X, Y, Xi, 'spline' ), '-',...
+                                        'LineWidth', 2.0 );                 % Thermal conductivity
             xlabel( Ax( 1 ), "Axial Distance [m]");
             ylabel( Ax( 1 ), "Deposit Thermal Conductivity [W/K/m]");
+            X = FSim.ModelPara.rho_d(:,1);
+            Y = FSim.ModelPara.rho_d(:,2);
+            plot( Ax( 2 ), Xi, interp1( X, Y, Xi, 'spline' ), '-',...
+                                        'LineWidth', 2.0 );                 % Deposit density
             xlabel( Ax( 2 ), "Axial Distance [m]");
-            ylabel( Ax( 2 ), "Deposit Density [kg/m^3]");
+            ylabel( Ax( 2 ), "Deposit Density [kg/m^3]");            
+            plot( Ax( 3 ), FSim.T_out_L_degC, FSim.deltaPre_L_kPa, 's' );   % Temperature out versus delta pressure
             xlabel( Ax( 3 ), "T_{out} [^oC]");
             ylabel( Ax( 3 ), "\Deltap [kPa]")
-            legend( Ax( 3 ), "Data", "Model" )
-            xlabel( Ax( 4 ), "Control Volume [#]");
+            legend( Ax( 3 ), "Data", "Model", "Location", "NorthWest" )
+            X = FSim.BoundCond.soot_phi0( 1, : );
+            Y = FSim.BoundCond.soot_phi0( 2, : );
+            yyaxis( Ax( 4 ), 'left' );
+            plot( Ax( 4 ), Xi, 1000 * interp1( X, Y, Xi, 'spline' ),...
+                'LineWidth', 2.0 );                                         % Deposit layer thickness
+            xlabel( Ax( 4 ), "Axial Distance [m]");
             ylabel( Ax( 4 ), "\phi [mm]");
-            for Q = [1,2,4]
-                H = Ax(Q).Children;
-                H.LineWidth = 2.0;
-            end
+            yyaxis( Ax( 4 ), 'right' );
+            X = linspace( 0, FSim.BoundCond.L, FSim.BoundCond.N_cell );
+            Y = FSim.r_HCs_soot_tn1;
+            ylabel( Ax( 4 ), 'HC/Soot ratio' );
+            plot( Xi, interp1( X, Y, Xi, 'spline' ), 'LineWidth', 2.0 );
         end % plotBestSimulation
+
+        function plotTimeSeries( obj )
+            %--------------------------------------------------------------
+            % Plot the 
+        end % plotTimeSeries
 
         function obj = genNewQuery( obj )
             %--------------------------------------------------------------
@@ -316,7 +333,8 @@ classdef ecomoInterface < handle
             %
             % Input Arguments:
             %
-            % ModelPara --> (struct) Simulation model parameters
+            % ModelPara --> (struct) Simulation model 
+
             % BoundCond --> (struct) Initial conditions
             % Options   --> (struct) Configuration options
             %--------------------------------------------------------------
