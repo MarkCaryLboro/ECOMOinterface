@@ -14,6 +14,10 @@ classdef ecomoInterface < handle
         Data   (1,1)   struct                                               % Identification training data
     end
 
+    properties ( SetAccess = protected, Dependent = true )
+        BestFM          FoulingModel
+    end % dependent properties
+
     methods
         function obj = loadIdentificationData( obj, Fname, Varname )
             %--------------------------------------------------------------
@@ -176,8 +180,7 @@ classdef ecomoInterface < handle
             %
             % obj.plotBestSimulation();
             %--------------------------------------------------------------
-            Ptr = obj.B.Bidx;                                               % Point to the best simulation
-            FSim = obj.FM( Ptr );                                           % Retrieve the best simulation
+            FSim = obj.BestFM;                                              % Retrieve the best simulation
             %--------------------------------------------------------------
             % Now plot the results
             %--------------------------------------------------------------
@@ -200,24 +203,84 @@ classdef ecomoInterface < handle
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             % To Do : Generalise the plotting
             %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            plot( Ax( 1 ), FSim.ModelPara.k_d(:,1), FSim.ModelPara.k_d(:,2), '-' );     % Thermal conductivity
-            plot( Ax( 2 ), FSim.ModelPara.rho_d(:,1), FSim.ModelPara.rho_d(:,2), '-');  % Deposit density
-            plot( Ax( 3 ), FSim.T_out_L_degC, FSim.deltaPre_L_kPa, 's' );               % Temperature out versus delta pressure
-            plot( Ax( 4 ), 1000 * FSim.phi_soot_tn1, '-' );                             % Deposit layer thickness
+            X = FSim.ModelPara.k_d(:,1);
+            Xi = linspace( min( X ), max( X ), 1001 );
+            Y = FSim.ModelPara.k_d(:,2);
+            plot( Ax( 1 ), Xi, interp1( X, Y, Xi, 'spline' ), '-',...
+                                        'LineWidth', 2.0 );                 % Thermal conductivity
             xlabel( Ax( 1 ), "Axial Distance [m]");
             ylabel( Ax( 1 ), "Deposit Thermal Conductivity [W/K/m]");
+            X = FSim.ModelPara.rho_d(:,1);
+            Y = FSim.ModelPara.rho_d(:,2);
+            plot( Ax( 2 ), Xi, interp1( X, Y, Xi, 'spline' ), '-',...
+                                        'LineWidth', 2.0 );                 % Deposit density
             xlabel( Ax( 2 ), "Axial Distance [m]");
-            ylabel( Ax( 2 ), "Deposit Density [kg/m^3]");
+            ylabel( Ax( 2 ), "Deposit Density [kg/m^3]");            
+            plot( Ax( 3 ), FSim.T_out_L_degC, FSim.deltaPre_L_kPa, 's' );   % Temperature out versus delta pressure
             xlabel( Ax( 3 ), "T_{out} [^oC]");
             ylabel( Ax( 3 ), "\Deltap [kPa]")
-            legend( Ax( 3 ), "Data", "Model" )
-            xlabel( Ax( 4 ), "Control Volume [#]");
+            legend( Ax( 3 ), "Data", "Model", "Location", "NorthWest" )
+            X = FSim.BoundCond.soot_phi0( 1, : );
+            Y = FSim.BoundCond.soot_phi0( 2, : );
+            yyaxis( Ax( 4 ), 'left' );
+            plot( Ax( 4 ), Xi, interp1( X, Y, Xi, 'spline' ),...
+                'LineWidth', 2.0 );                                         % Deposit layer thickness
+            xlabel( Ax( 4 ), "Axial Distance [m]");
             ylabel( Ax( 4 ), "\phi [mm]");
-            for Q = [1,2,4]
-                H = Ax(Q).Children;
-                H.LineWidth = 2.0;
-            end
+            yyaxis( Ax( 4 ), 'right' );
+            X = linspace( 0, FSim.BoundCond.L, FSim.BoundCond.N_cell );
+            Y = FSim.r_HCs_soot_tn1;
+            ylabel( Ax( 4 ), 'HC/Soot ratio' );
+            plot( Xi, interp1( X, Y, Xi, 'spline' ), 'LineWidth', 2.0 );
         end % plotBestSimulation
+
+        function plotTimeSeries( obj )
+            %--------------------------------------------------------------
+            % Plot the model predictions versus the identification data as
+            % a time series.
+            %
+            % obj.plotTimeSeries();
+            %--------------------------------------------------------------
+            FSim = obj.BestFM;                                              % Retrieve the best simulation
+            %--------------------------------------------------------------
+            % Define signals to plot
+            %--------------------------------------------------------------
+            Torque = obj.Data.torque;
+            RPM = obj.Data.rpm;
+            Dtemp = FSim.deltaTemp_L_degC;
+            Dpress = FSim.deltaPre_L_kPa;
+            %--------------------------------------------------------------
+            % Define plotting axes
+            %--------------------------------------------------------------
+            figure;
+            for Q = 4:-1:1
+                Ax( Q ) = subplot( 2, 2, Q);
+                Ax( Q ).NextPlot = "add";
+                grid on;
+                Ax( Q ).GridAlpha = 0.5;
+                Ax( Q ).GridLineStyle = ":";
+            end
+            %--------------------------------------------------------------
+            % Make the plots
+            %--------------------------------------------------------------
+            Tres = obj.Data.T_g_in - obj.Data.T_g_out;
+            plot( Ax( 1 ), obj.Data.t, Tres, 'g-', 'LineWidth', 2.0 );
+            plot( Ax( 1 ), obj.Data.t, Dtemp, 'r-', 'LineWidth', 2.0 );
+            xlabel( Ax( 1 ), "Time [s]", "FontSize", 14 );
+            ylabel( Ax( 1 ), '\Delta Temp [^oc]', "FontSize", 14);
+            legend( Ax( 1 ), "Data", "Model", "Location", "northoutside");
+            plot( Ax( 2 ), obj.Data.t, obj.Data.deltaP, 'g-', 'LineWidth', 2.0 );
+            plot( Ax( 2 ), obj.Data.t, Dpress, 'r-', 'LineWidth', 2.0 );
+            xlabel( Ax( 2 ), "Time [s]", "FontSize", 14 );
+            ylabel( Ax( 2 ), '\Delta Pressure [kPa]', "FontSize", 14);
+            legend( Ax( 2 ), "Data", "Model", "Location", "northoutside");
+            plot( Ax( 3 ), obj.Data.t, RPM,  'k-', 'LineWidth', 2.0 );
+            xlabel( Ax( 3 ), "Time [s]", "FontSize", 14 );
+            ylabel( Ax( 3 ), 'Engine Speed [RPM]', "FontSize", 14);
+            plot( Ax( 4 ), obj.Data.t, Torque,  'k-', 'LineWidth', 2.0 );
+            xlabel( Ax( 4 ), "Time [s]", "FontSize", 14 );
+            ylabel( Ax( 4 ), 'Brake Torque [Nm]', "FontSize", 14);
+        end % plotTimeSeries
 
         function obj = genNewQuery( obj )
             %--------------------------------------------------------------
@@ -266,6 +329,14 @@ classdef ecomoInterface < handle
             L = -L;
         end % processResiduals        
     end % Ordinary methods
+
+    methods
+        function F = get.BestFM( obj )
+            % Return best fouling model simulation
+            Ptr = obj.B.Bidx;                                               % Point to the best simulation
+            F = obj.FM( Ptr );                                              % Retrieve the best simulation
+        end % get.BestFm
+    end % Get/Set methods
 
     methods ( Access = protected )
         function obj = exportData( obj, Res, SurModel, AcqFcn )
@@ -316,7 +387,8 @@ classdef ecomoInterface < handle
             %
             % Input Arguments:
             %
-            % ModelPara --> (struct) Simulation model parameters
+            % ModelPara --> (struct) Simulation model 
+
             % BoundCond --> (struct) Initial conditions
             % Options   --> (struct) Configuration options
             %--------------------------------------------------------------
