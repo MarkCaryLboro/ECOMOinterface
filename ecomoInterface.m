@@ -14,6 +14,10 @@ classdef ecomoInterface < handle
         Data   (1,1)   struct                                               % Identification training data
     end
 
+    properties ( SetAccess = protected, Dependent = true )
+        BestFM          FoulingModel
+    end % dependent properties
+
     methods
         function obj = loadIdentificationData( obj, Fname, Varname )
             %--------------------------------------------------------------
@@ -176,8 +180,7 @@ classdef ecomoInterface < handle
             %
             % obj.plotBestSimulation();
             %--------------------------------------------------------------
-            Ptr = obj.B.Bidx;                                               % Point to the best simulation
-            FSim = obj.FM( Ptr );                                           % Retrieve the best simulation
+            FSim = obj.BestFM;                                              % Retrieve the best simulation
             %--------------------------------------------------------------
             % Now plot the results
             %--------------------------------------------------------------
@@ -220,7 +223,7 @@ classdef ecomoInterface < handle
             X = FSim.BoundCond.soot_phi0( 1, : );
             Y = FSim.BoundCond.soot_phi0( 2, : );
             yyaxis( Ax( 4 ), 'left' );
-            plot( Ax( 4 ), Xi, 1000 * interp1( X, Y, Xi, 'spline' ),...
+            plot( Ax( 4 ), Xi, interp1( X, Y, Xi, 'spline' ),...
                 'LineWidth', 2.0 );                                         % Deposit layer thickness
             xlabel( Ax( 4 ), "Axial Distance [m]");
             ylabel( Ax( 4 ), "\phi [mm]");
@@ -233,7 +236,50 @@ classdef ecomoInterface < handle
 
         function plotTimeSeries( obj )
             %--------------------------------------------------------------
-            % Plot the 
+            % Plot the model predictions versus the identification data as
+            % a time series.
+            %
+            % obj.plotTimeSeries();
+            %--------------------------------------------------------------
+            FSim = obj.BestFM;                                              % Retrieve the best simulation
+            %--------------------------------------------------------------
+            % Define signals to plot
+            %--------------------------------------------------------------
+            Torque = obj.Data.torque;
+            RPM = obj.Data.rpm;
+            Dtemp = FSim.deltaTemp_L_degC;
+            Dpress = FSim.deltaPre_L_kPa;
+            %--------------------------------------------------------------
+            % Define plotting axes
+            %--------------------------------------------------------------
+            figure;
+            for Q = 4:-1:1
+                Ax( Q ) = subplot( 2, 2, Q);
+                Ax( Q ).NextPlot = "add";
+                grid on;
+                Ax( Q ).GridAlpha = 0.5;
+                Ax( Q ).GridLineStyle = ":";
+            end
+            %--------------------------------------------------------------
+            % Make the plots
+            %--------------------------------------------------------------
+            Tres = obj.Data.T_g_in - obj.Data.T_g_out;
+            plot( Ax( 1 ), obj.Data.t, Tres, 'g-', 'LineWidth', 2.0 );
+            plot( Ax( 1 ), obj.Data.t, Dtemp, 'r-', 'LineWidth', 2.0 );
+            xlabel( Ax( 1 ), "Time [s]", "FontSize", 14 );
+            ylabel( Ax( 1 ), '\Delta Temp [^oc]', "FontSize", 14);
+            legend( Ax( 1 ), "Data", "Model", "Location", "northoutside");
+            plot( Ax( 2 ), obj.Data.t, obj.Data.deltaP, 'g-', 'LineWidth', 2.0 );
+            plot( Ax( 2 ), obj.Data.t, Dpress, 'r-', 'LineWidth', 2.0 );
+            xlabel( Ax( 2 ), "Time [s]", "FontSize", 14 );
+            ylabel( Ax( 2 ), '\Delta Pressure [kPa]', "FontSize", 14);
+            legend( Ax( 2 ), "Data", "Model", "Location", "northoutside");
+            plot( Ax( 3 ), obj.Data.t, RPM,  'k-', 'LineWidth', 2.0 );
+            xlabel( Ax( 3 ), "Time [s]", "FontSize", 14 );
+            ylabel( Ax( 3 ), 'Engine Speed [RPM]', "FontSize", 14);
+            plot( Ax( 4 ), obj.Data.t, Torque,  'k-', 'LineWidth', 2.0 );
+            xlabel( Ax( 4 ), "Time [s]", "FontSize", 14 );
+            ylabel( Ax( 4 ), 'Brake Torque [Nm]', "FontSize", 14);
         end % plotTimeSeries
 
         function obj = genNewQuery( obj )
@@ -283,6 +329,14 @@ classdef ecomoInterface < handle
             L = -L;
         end % processResiduals        
     end % Ordinary methods
+
+    methods
+        function F = get.BestFM( obj )
+            % Return best fouling model simulation
+            Ptr = obj.B.Bidx;                                               % Point to the best simulation
+            F = obj.FM( Ptr );                                              % Retrieve the best simulation
+        end % get.BestFm
+    end % Get/Set methods
 
     methods ( Access = protected )
         function obj = exportData( obj, Res, SurModel, AcqFcn )
