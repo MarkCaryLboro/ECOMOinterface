@@ -234,6 +234,54 @@ classdef ecomoInterface < handle
             plot( Xi, interp1( X, Y, Xi, 'spline' ), 'LineWidth', 2.0 );
         end % plotBestSimulation
 
+        function [ ModelPara, BoundCond, Options ] = exportParameters( obj ) %#ok<STOUT> 
+            %--------------------------------------------------------------
+            % Export the identified parameters to the wotkspace. Store in
+            % the Id property.
+            %
+            % [ ModelPara, BoundCond ] = obj.exportParameters();
+            %
+            % Output Arguments:
+            %
+            % ModelPara - (struct) fouling model parameter structure
+            % BoundCond - (struct) 
+            %--------------------------------------------------------------
+            H = obj.Lh.Source{ : };                                         % DoEhook object
+            S = H.Lh.Source{ : };
+            T = S.Factors.Type;
+            NumFactors = S.NumFactors;
+            Names = H.ParTable.Properties.VariableNames( 1:( end - 1) );
+            P = H.ParTable( obj.B.Bidx, 1:( end - 1 ) );
+            %--------------------------------------------------------------
+            % Run the configuration file to define the parameters
+            %--------------------------------------------------------------
+            run( H.ConfigFile );
+            for Q = 1:NumFactors
+                %----------------------------------------------------------
+                % Overwrite the parameters and boundary conditions as
+                % required
+                %----------------------------------------------------------
+                X = P{ :, Names{ Q } };
+                if iscell( X )
+                    X = X{ : };
+                end
+                if contains( "Parameter", T( Q ) )
+                    ModelPara.( Names{ Q } ) = X;
+                else
+                    BoundCond.( Names{ Q } ) = X;
+                end
+            end
+            %--------------------------------------------------------------
+            % Save the results
+            %--------------------------------------------------------------
+            [ Path, Fname, Ext ] = fileparts( obj.IDdata );
+            Fname = strjoin( [ Fname, "Analysis"], "_" );
+            Fname = strjoin( [ Fname, Ext ], "" );
+            Fname = fullfile( Path, Fname );
+            BoundCond.IN_TimeSeries = obj.Data;
+            save( Fname, "BoundCond", "ModelPara", "Options" );
+        end % exportParameters
+
         function plotTimeSeries( obj )
             %--------------------------------------------------------------
             % Plot the model predictions versus the identification data as
