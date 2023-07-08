@@ -54,6 +54,16 @@ classdef ecomoInterface < handle
             load( obj.IDdata,  Varname );
             obj.Data = eval( Varname );
         end % loadIdentificationData
+        
+        function obj = setXbestAsXnext( obj )
+            %--------------------------------------------------------------
+            % Set the next query to be evaluated to the best encountered so
+            % far.
+            %
+            % obj.setXbestAsXnext();
+            %--------------------------------------------------------------
+            obj.B = obj.B.setXbestAsXnext();
+        end % setXbestAsXnext
 
         function [ Lo, Hi ] = setDataBounds( obj, Dx )
             %--------------------------------------------------------------
@@ -390,7 +400,7 @@ classdef ecomoInterface < handle
             ylabel( Ax( 4 ), 'Brake Torque [Nm]', "FontSize", 14);
         end % plotTimeSeries
 
-        function obj = genNewQuery( obj )
+        function obj = genNewQuery( obj )   
             %--------------------------------------------------------------
             % Optimise the acquisition function and generate a new query.
             % Augment the design with the new point.
@@ -398,7 +408,16 @@ classdef ecomoInterface < handle
             % obj = obj.genNewQuery();
             %--------------------------------------------------------------
             [ Lo, Hi ] = obj.setDataBounds( 0 );
-            obj.B = obj.B.acqFcnMaxTemplate( "lb", Lo, "ub", Hi );
+            SobSeqObj = obj.Src.DesObj;
+            %--------------------------------------------------------------
+            % Define the nonlinear constraints function
+            %--------------------------------------------------------------
+            NonLinCon = @(X)ecomoBsplineConstraintHandler( X, SobSeqObj );
+            %--------------------------------------------------------------
+            % Find the next point to query
+            %--------------------------------------------------------------
+            obj.B = obj.B.acqFcnMaxTemplate( "lb", Lo, "ub", Hi,...
+                                             "nonlcon", NonLinCon );
         end % genNewQuery
 
         function exportNewQuery( obj )
