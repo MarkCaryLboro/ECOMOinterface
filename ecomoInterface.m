@@ -10,18 +10,38 @@ classdef ecomoInterface < handle
         Lh     (1,1)                                                        % Listener handle for RUN_EXPERIMENT event
         FM     (1,:)   FoulingModel                                         % ECOMO fouling model object array
         IDdata (1,1)   string                                               % Name of identification data file
-        B      (1,:)   bayesOpt = bayesOpt.empty                            % bayesOpt object
+        B      (1,1)   bayesOpt                                             % bayesOpt object
         Data   (1,1)   struct                                               % Identification training data
     end
 
     properties ( SetAccess = protected, Dependent = true )
         BestFM         FoulingModel                                         % Best simulation object
+        Problem        String                                               % Problem type
     end % dependent properties
 
     properties ( Access = private, Dependent = true )
     end
 
     methods
+        function obj = defineBayesOpt( obj, Model, AcqFcn )
+            %--------------------------------------------------------------
+            % Set the bayesOpt object model type and acquisition function
+            %
+            % Input Arguments:
+            %
+            % Model     --> (string) surrogate model type. Must be either
+            %               {"gpr"} or "rf".
+            % AcqFcn    --> (string) Acquisition function name. Must be 
+            %               either {"ucb"}, "aei" or "ei".
+            %--------------------------------------------------------------
+            arguments
+                obj     (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Model   (1,1) string = "gpr"
+                AcqFcn  (1,1) string = "ucb"
+            end
+            obj.B = bayesOpt( Model, AcqFcn );
+        end % defineBayesOpt
+
         function obj = loadIdentificationData( obj, Fname, Varname )
             %--------------------------------------------------------------
             % Load the identification data file
@@ -55,6 +75,25 @@ classdef ecomoInterface < handle
             obj.Data = eval( Varname );
         end % loadIdentificationData
         
+        function obj = setProblemType( obj, M )
+            %--------------------------------------------------------------
+            % Set the optimisation problem type (maximisation or 
+            % minimisation).
+            %
+            % obj = obj.setProblemType( M );
+            %
+            % Input Arguments:
+            %
+            % M --> (logical) set to true for a maximisation problem, and
+            %                 false for a minimisation problem.
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface  { mustBeNonempty( obj ) }
+                M   (1,1) logical                                           = true
+            end
+            obj.B = obj.B.setProblemTypeState( M );
+        end % setProblemType
+
         function obj = setXbestAsXnext( obj )
             %--------------------------------------------------------------
             % Set the next query to be evaluated to the best encountered so
@@ -453,7 +492,7 @@ classdef ecomoInterface < handle
                                 log( Pres( :,Q ).' * Pres( :,Q ) ) );
                 L( Q ) = N * log( 2 * pi ) + N + L( Q );
             end
-            L = -L;
+%             L = -L;
         end % processResiduals        
     end % Ordinary methods
 
@@ -463,6 +502,11 @@ classdef ecomoInterface < handle
             Ptr = obj.B.Bidx;                                               % Point to the best simulation
             F = obj.FM( Ptr );                                              % Retrieve the best simulation
         end % get.BestFm
+
+        function P = get.Problem( obj )
+            % Return the problem type
+            P = obj.B.Problem;
+        end % get.Problem
     end % Get/Set methods
 
     methods ( Access = protected )
