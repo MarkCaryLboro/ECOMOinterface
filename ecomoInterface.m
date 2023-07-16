@@ -10,15 +10,38 @@ classdef ecomoInterface < handle
         Lh     (1,1)                                                        % Listener handle for RUN_EXPERIMENT event
         FM     (1,:)   FoulingModel                                         % ECOMO fouling model object array
         IDdata (1,1)   string                                               % Name of identification data file
-        B      (1,:)   bayesOpt = bayesOpt.empty                            % bayesOpt object
+        B      (1,1)   bayesOpt                                             % bayesOpt object
         Data   (1,1)   struct                                               % Identification training data
     end
 
     properties ( SetAccess = protected, Dependent = true )
-        BestFM          FoulingModel
+        BestFM         FoulingModel                                         % Best simulation object
+        Problem        String                                               % Problem type
     end % dependent properties
 
+    properties ( Access = private, Dependent = true )
+    end
+
     methods
+        function obj = defineBayesOpt( obj, Model, AcqFcn )
+            %--------------------------------------------------------------
+            % Set the bayesOpt object model type and acquisition function
+            %
+            % Input Arguments:
+            %
+            % Model     --> (string) surrogate model type. Must be either
+            %               {"gpr"} or "rf".
+            % AcqFcn    --> (string) Acquisition function name. Must be 
+            %               either {"ucb"}, "aei" or "ei".
+            %--------------------------------------------------------------
+            arguments
+                obj     (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Model   (1,1) string = "gpr"
+                AcqFcn  (1,1) string = "ucb"
+            end
+            obj.B = bayesOpt( Model, AcqFcn );
+        end % defineBayesOpt
+
         function obj = loadIdentificationData( obj, Fname, Varname )
             %--------------------------------------------------------------
             % Load the identification data file
@@ -51,6 +74,35 @@ classdef ecomoInterface < handle
             load( obj.IDdata,  Varname );
             obj.Data = eval( Varname );
         end % loadIdentificationData
+        
+        function obj = setProblemType( obj, M )
+            %--------------------------------------------------------------
+            % Set the optimisation problem type (maximisation or 
+            % minimisation).
+            %
+            % obj = obj.setProblemType( M );
+            %
+            % Input Arguments:
+            %
+            % M --> (logical) set to true for a maximisation problem, and
+            %                 false for a minimisation problem.
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface  { mustBeNonempty( obj ) }
+                M   (1,1) logical                                           = true
+            end
+            obj.B = obj.B.setProblemTypeState( M );
+        end % setProblemType
+
+        function obj = setXbestAsXnext( obj )
+            %--------------------------------------------------------------
+            % Set the next query to be evaluated to the best encountered so
+            % far.
+            %
+            % obj.setXbestAsXnext();
+            %--------------------------------------------------------------
+            obj.B = obj.B.setXbestAsXnext();
+        end % setXbestAsXnext
 
         function [ Lo, Hi ] = setDataBounds( obj, Dx )
             %--------------------------------------------------------------
@@ -130,9 +182,9 @@ classdef ecomoInterface < handle
             Ok = contains( "RUN_EXPERIMENT", Ename );
             assert( Ok, 'Not processing the %s event supplied', Ename );
             %--------------------------------------------------------------
-            % 1. Run the ECOMO model configuration script
+            % 1. Run the ECOMO model configuration function
             %--------------------------------------------------------------
-            run( SrcObj.ConfigFile );
+            [ BoundCond, ModelPara, Options ] = eval( SrcObj.ConfigFile );
             BoundCond.L = SrcObj.TubeLength;                                % Define length of tube
             BoundCond.D0 = SrcObj.TubeIntDia;                               % Define diameter of tube
             BoundCond.IN_TimeSeries = obj.Data;                             % Load the identification data
@@ -220,11 +272,13 @@ classdef ecomoInterface < handle
             xlabel( Ax( 3 ), "T_{out} [^oC]");
             ylabel( Ax( 3 ), "\Deltap [kPa]")
             legend( Ax( 3 ), "Data", "Model", "Location", "NorthWest" )
-            X = FSim.BoundCond.soot_phi0( 1, : );
-            Y = FSim.BoundCond.soot_phi0( 2, : );
+            X = FSim.BoundCond.soot_phi0( :, 1 );
+            Y = 1000*FSim.BoundCond.soot_phi0( :, 2 );
+            Yend = 1000*FSim.phi_soot_tn1;
             yyaxis( Ax( 4 ), 'left' );
-            plot( Ax( 4 ), Xi, interp1( X, Y, Xi, 'spline' ),...
-                'LineWidth', 2.0 );                                         % Deposit layer thickness
+            plot( Ax( 4 ), Xi, interp1( X, Y, Xi, 'spline' ), 'b-',...
+                           Xi, interp1( X, Yend, Xi, 'spline' ), 'b:',...
+                           'LineWidth', 2.0 );                              % Deposit layer thickness
             xlabel( Ax( 4 ), "Axial Distance [m]");
             ylabel( Ax( 4 ), "\phi [mm]");
             yyaxis( Ax( 4 ), 'right' );
@@ -232,17 +286,71 @@ classdef ecomoInterface < handle
             Y = FSim.r_HCs_soot_tn1;
             ylabel( Ax( 4 ), 'HC/Soot ratio' );
             plot( Xi, interp1( X, Y, Xi, 'spline' ), 'LineWidth', 2.0 );
+            legend( Ax(4), '\phi(x,0)', '\phi(x,t_{end})', '\Xi', 'Location',...
+                'northoutside', 'Orientation', 'horizontal');
         end % plotBestSimulation
+        
+        function F = runIdentifiedSimulation( obj, R, Cln )
+            %--------------------------------------------------------------
+            % Run an ECOMO model simulation with the identified parameters.
+            % If required the time series can be replicated multiple times.
+            %
+            % F = obj.runIdentifiedSimulation( R, Cln );
+            %
+            % Input Arguments:
+            %
+            % R   --> (int64) Number of times to replicate the time series.
+            %                 {0}. For example, setting R = 1 doubles the
+            %                 length of the time series. 
+            % Cln --> (logical) Set to true to run from clean tube state
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface     { mustBeNonempty( obj ) }
+                R   (1,1) int64              { mustBePositive( R )}    = 0
+                Cln (1,1) logical   = false
+            end
+            %--------------------------------------------------------------
+            % Load the identified structures
+            %--------------------------------------------------------------
+            [ Fname, Path ] = uigetfile( ".mat",...
+                "Select the identification parameter file",...
+                "MultiSelect", "off");
+            Fname = fullfile( Path, Fname );
+            load( Fname, "BoundCond", "ModelPara", "Options" );
+            if Cln
+                %----------------------------------------------------------
+                % Run clean tube simulation if required
+                %----------------------------------------------------------
+                BoundCond.soot_phi0( :, 2 ) = 0;
+            end
+            %--------------------------------------------------------------
+            % Replicate the time series
+            %--------------------------------------------------------------
+            if ~isfield( BoundCond, "IN_TimeSeries" )
+                BoundCond.IN_TimeSeries = obj.Data;
+            end
+            for Q = 1:R
+                %----------------------------------------------------------
+                % Replicate the time series if necessary
+                %----------------------------------------------------------
+                BoundCond.IN_TimeSeries = ...
+                            obj.repTimeSeries( BoundCond.IN_TimeSeries );
+            end % /Q
+            F = FoulingModel( BoundCond, ModelPara, Options );
+            F.run;
+        end
 
-        function [ ModelPara, BoundCond, Options ] = exportParameters( obj ) %#ok<STOUT> 
+        function [ FM, ModelPara, BoundCond, Options ] = exportParameters( obj ) 
             %--------------------------------------------------------------
             % Export the identified parameters to the wotkspace. Store in
             % the Id property.
             %
-            % [ ModelPara, BoundCond ] = obj.exportParameters();
+            % [ FMbest, ModelPara, BoundCond ] = obj.exportParameters();
             %
             % Output Arguments:
             %
+            % FMbest    - (FoulingModel) best simulation for the training
+            % data
             % ModelPara - (struct) fouling model parameter structure
             % BoundCond - (struct) 
             %--------------------------------------------------------------
@@ -255,7 +363,7 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             % Run the configuration file to define the parameters
             %--------------------------------------------------------------
-            run( H.ConfigFile );
+            [ BoundCond, ModelPara, Options ] = eval( H.ConfigFile );
             for Q = 1:NumFactors
                 %----------------------------------------------------------
                 % Overwrite the parameters and boundary conditions as
@@ -279,7 +387,8 @@ classdef ecomoInterface < handle
             Fname = strjoin( [ Fname, Ext ], "" );
             Fname = fullfile( Path, Fname );
             BoundCond.IN_TimeSeries = obj.Data;
-            save( Fname, "BoundCond", "ModelPara", "Options" );
+            FM = obj.BestFM;
+            save( Fname, "FM", "BoundCond", "ModelPara", "Options" );
         end % exportParameters
 
         function plotTimeSeries( obj )
@@ -330,15 +439,24 @@ classdef ecomoInterface < handle
             ylabel( Ax( 4 ), 'Brake Torque [Nm]', "FontSize", 14);
         end % plotTimeSeries
 
-        function obj = genNewQuery( obj )
+        function obj = genNewQuery( obj )   
             %--------------------------------------------------------------
             % Optimise the acquisition function and generate a new query.
             % Augment the design with the new point.
             %
             % obj = obj.genNewQuery();
             %--------------------------------------------------------------
-            [ Lo, Hi ] = obj.setDataBounds( 0.1 );
-            obj.B = obj.B.acqFcnMaxTemplate( "lb", Lo, "ub", Hi );
+            [ Lo, Hi ] = obj.setDataBounds( 0 );
+            SobSeqObj = obj.Src.DesObj;
+            %--------------------------------------------------------------
+            % Define the nonlinear constraints function
+            %--------------------------------------------------------------
+            NonLinCon = @(X)ecomoBsplineConstraintHandler( X, SobSeqObj );
+            %--------------------------------------------------------------
+            % Find the next point to query
+            %--------------------------------------------------------------
+            obj.B = obj.B.acqFcnMaxTemplate( "lb", Lo, "ub", Hi,...
+                                             "nonlcon", NonLinCon );
         end % genNewQuery
 
         function exportNewQuery( obj )
@@ -374,7 +492,7 @@ classdef ecomoInterface < handle
                                 log( Pres( :,Q ).' * Pres( :,Q ) ) );
                 L( Q ) = N * log( 2 * pi ) + N + L( Q );
             end
-            L = -L;
+%             L = -L;
         end % processResiduals        
     end % Ordinary methods
 
@@ -384,6 +502,11 @@ classdef ecomoInterface < handle
             Ptr = obj.B.Bidx;                                               % Point to the best simulation
             F = obj.FM( Ptr );                                              % Retrieve the best simulation
         end % get.BestFm
+
+        function P = get.Problem( obj )
+            % Return the problem type
+            P = obj.B.Problem;
+        end % get.Problem
     end % Get/Set methods
 
     methods ( Access = protected )
@@ -403,29 +526,75 @@ classdef ecomoInterface < handle
                 obj.B = bayesOpt( SurModel, AcqFcn );
             end
             X = obj.makeXmatrix();
-            obj.B = obj.B.conDataCoding( min( X ),  max( X ) );
+            [ Lo, Hi ] = fetchLimits( obj );
+            obj.B = obj.B.conDataCoding( Lo, Hi );
             obj.B = obj.B.setTrainingData( X, Res(:) );
         end % exportData
     end % protected methods
 
-    methods ( Access = private )        
+    methods ( Access = private ) 
+        function [ Lo, Hi ] = fetchLimits( obj )
+            %--------------------------------------------------------------
+            % Fetch the low and high limits for each factor
+            %
+            % [ Lo, Hi ] = obj.fetchLimits();
+            %--------------------------------------------------------------
+            Info = obj.Src.DesObj.DesignInfo;                               % Retrieve pointers to variables
+            L = obj.Src.DesObj.Factors.Lo;                                  % Low limit for each factor
+            H = obj.Src.DesObj.Factors.Hi;                                  % High limit for each factor
+            NumColsDesign = size( obj.Src.DesObj.Design, 2 );               % Number of parameters identified
+            [ Lo, Hi ] = deal( zeros( 1, NumColsDesign ) );
+            for Q = 1:obj.Src.NumFactors
+                %----------------------------------------------------------
+                % Generate the limit vectors one factor at a time
+                %----------------------------------------------------------
+                Coeff = Info{ Q, "Coefficients" };
+                if iscell( Coeff )
+                    Coeff = Coeff{ : };
+                end
+                Knots = Info{ Q, "Knots" };
+                if iscell( Knots )
+                    Knots = Knots{ : };
+                end
+                Lo( Coeff ) = repmat( L( Q ), size( Coeff ) );
+                Hi( Coeff ) = repmat( H( Q ), size( Coeff ) ); 
+                if ~isnan( Knots )
+                    Lo( Knots ) = repmat( 0.1 * obj.Src.DesObj.TubeLength, size( Knots ) );
+                    Hi( Knots ) = repmat( 0.9 * obj.Src.DesObj.TubeLength, size( Knots ) );
+                end
+            end % /Q
+        end % fetchLimits
+
         function X = makeXmatrix( obj )
             %--------------------------------------------------------------
             % Construct the X-matrix for the BO process
             %
             % X = obj.makeXmatrix();
             %--------------------------------------------------------------
-
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            % To do: This code only supports identification at a single
-            % operating point. Needs generalising for the characterisation
-            % experimental data
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
             X = obj.Src.Design;
         end  
     end % private methods
 
     methods ( Access = protected, Static = true )
+        function S = repTimeSeries( S )
+            %--------------------------------------------------------------
+            % One replicate the identification data time series structure
+            %
+            % S = obj.repTimeSeries( S );
+            %
+            % Input Arguments:
+            %
+            % S --> (struct) Storage for replicated data
+            %--------------------------------------------------------------
+            Fnames = string( fieldnames( S ) );
+            N = numel( Fnames );
+            for Q = 1:N
+                D = S.( Fnames( Q ) );
+                D = repmat( D, 2, 1 );
+                S.( Fnames( Q ) ) = D;
+            end % /Q
+        end
+
         function FM = runSimulation( ModelPara, BoundCond, Options )
             %--------------------------------------------------------------
             % Run an ECOMO simulation
@@ -443,6 +612,7 @@ classdef ecomoInterface < handle
             FM = FoulingModel(BoundCond,ModelPara,Options);                 % Define the simulation object
             FM.run();                                                       % Run the simulation
         end % runSimulation
+
         function [ P, Bc ] = parameterCheck( M, B, S, R )
             %--------------------------------------------------------------
             % Return 2 structures containing all the identification
