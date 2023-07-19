@@ -27,8 +27,16 @@ function [ C, Ceq ] = ecomoBsplineConstraintHandler( Theta, D )
     Con = D.Bspline.Constraint;
     Names = string( D.Bspline.Properties.RowNames );
     N = numel( Names );
+    %----------------------------------------------------------------------
+    % Retain only splines with active constraints
+    %----------------------------------------------------------------------
+    ConIdx = ~cellfun( @isempty, Con );
+    %----------------------------------------------------------------------
+    % Decode the design
+    %----------------------------------------------------------------------
+    Theta = D.decodeDesign( Theta );
     for Q = 1:N
-        if ~isempty( Con{ Q } )
+        if ConIdx( Q )
             %--------------------------------------------------------------
             % Set the x-points to evaluate the constraint at
             %--------------------------------------------------------------
@@ -51,7 +59,11 @@ function [ C, Ceq ] = ecomoBsplineConstraintHandler( Theta, D )
             Coef = Theta( Cidx );
             B.n = Knot;
             B.alpha = Coef;
-            [ C, Ceq ] = B.evalNonlinConstraints( X, Con{ Q } );
+            ApplyConstraint = ~( isempty(Con{ Q }.type) &...
+                                 isempty(Con{ Q }.derivative) );
+            if ApplyConstraint
+                [ C, Ceq ] = B.evalNonlinConstraints( X, Con{ Q } );
+            end
         end
     end % /Q
 end
