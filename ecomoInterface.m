@@ -6,12 +6,17 @@ classdef ecomoInterface < handle
     end
 
     properties ( SetAccess = protected )
-        Src    (1,1)                                                        % Event source
-        Lh     (1,1)                                                        % Listener handle for RUN_EXPERIMENT event
-        FM     (1,:)   FoulingModel                                         % ECOMO fouling model object array
-        IDdata (1,1)   string                                               % Name of identification data file
-        B      (1,1)   bayesOpt                                             % bayesOpt object
-        Data   (1,1)   struct                                               % Identification training data
+        Src     (1,1)                                                       % Event source
+        Lh      (1,1)                                                       % Listener handle for RUN_EXPERIMENT event
+        FM      (1,:)   FoulingModel                                        % ECOMO fouling model object array
+        IDdata  (1,1)   string                                              % Name of identification data file
+        B       (1,1)   bayesOpt                                            % bayesOpt object
+        Data    (1,1)   struct                                              % Identification training data
+        PNdist  (1,1)   struct                                              % PN distribution data
+        NumTube (1,1)   double   = 35                                       % Number of heat exchanger tubes
+        DuctGeo (1,1)   string   = "Circle"                                 % Duct geometry
+        TubeLen (1,1)   double   = 185                                      % Tube length in [mm]
+        HydDiam (1,1)   double   = 4.5                                      % Hydraulic diameter of the wetted tube [mm]
     end
 
     properties ( SetAccess = protected, Dependent = true )
@@ -23,6 +28,104 @@ classdef ecomoInterface < handle
     end
 
     methods
+        function obj = setHydDiam( obj, Dia )
+            %--------------------------------------------------------------
+            % Set the internal hydraulic diameter of the tube [mm]
+            %
+            % obj = obj.setHydDiam( Dia );
+            %
+            % Input Arguments:
+            %
+            % Dia --> (doubleI Tube inner diameter [mm]
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Dia (1,1) double         { mustBePositive( Dia ) }  = 4.5
+            end
+            obj.HydDiam = Dia; 
+        end % setHydDiam
+
+        function obj = setTubeLength( obj, Len )
+            %--------------------------------------------------------------
+            % Set the length of the heat exchanger tubes
+            %
+            % obj = obj.setTubeLength( Len );
+            %
+            % Input Arguments:
+            %
+            % len   --> (double) lengthr of heat exchanger tubes [mm]
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Len (1,1) double         { mustBePositive( Len ) }
+            end
+            obj.TubeLen = Len;        
+        end % setTubeLength
+
+        function obj = setDuctShape( obj, Geo )
+            %--------------------------------------------------------------
+            % Set the geometric shape of the interior tube geometry. 
+            %
+            % obj = obj.setDuctShape( Geo );
+            %
+            % Input Arguments:
+            %
+            % Geo --> (string) Must be "Circle", "Square" or "Rectangular"
+            %--------------------------------------------------------------
+            arguments 
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Geo (1,1) string { mustBeMember( Geo,...
+                                   ["Circle", "Square", "Rectangular"]) } = "Circle"
+            end
+            obj.DuctGeo = ductGeometry( Geo );
+        end % setDuctShape
+
+        function obj = setNumberOfTubes( obj, Num )
+            %--------------------------------------------------------------
+            % Set the number of heat exchanger tubes
+            %
+            % obj = obj.setNumberOfTubes( Num );
+            %
+            % Input Arguments:
+            %
+            % Num   --> (int8) number of heat exchanger tubes
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Num (1,1) int8 = 35;
+            end
+            obj.NumTube = Num;
+        end % setNumberOfTubes
+
+        function [ BoundCond, ModelPara, Options ] = initialisation( obj )
+            %--------------------------------------------------------------
+            % Create the three structures required to configure and run an
+            % ECOMO simulation:
+            %
+            % Output Arguments:
+            %
+            % BoundCond --> (struct) Boundary conditions foor model
+            % ModelPara --> (struct) Model parameters
+            % Options   --> (struct) Configuration options
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+            end
+            if isempty( obj.PNdist )
+                obj = obj.loadPNdistDataFile();                             % load PN distribution data
+            end
+            %--------------------------------------------------------------
+            % Initialize the three output structures 
+            %--------------------------------------------------------------
+            BoundCond = struct.empty; 
+            ModelPara = struct.empty;
+            Options = struct.empty; 
+            %--------------------------------------------------------------
+            % Define the boundary conditions
+            %--------------------------------------------------------------
+            
+        end % initialisation
+
         function obj = defineBayesOpt( obj, Model, AcqFcn )
             %--------------------------------------------------------------
             % Set the bayesOpt object model type and acquisition function
@@ -41,6 +144,39 @@ classdef ecomoInterface < handle
             end
             obj.B = bayesOpt( Model, AcqFcn );
         end % defineBayesOpt
+
+        function obj = loadPNdistDataFile( obj, Fname )
+            %--------------------------------------------------------------
+            % Load the data file containing the PN distribution particle
+            % bin sizes and histogram relative frequencies. Store in
+            % property "PNdist".
+            %
+            % obj = obj.loadPNdistDataFile( Fname );
+            %
+            % Input Arguments:
+            %
+            % Fname --> (string) Full file name of PN distirbution values.
+            %           If not supplied, the code will prompt the user for
+            %           the file via the standard windows file selection
+            %           GUI
+            %--------------------------------------------------------------
+            arguments
+                obj     (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Fname   (1,:) string = string.empty( 1, 0)
+            end
+            if ( nargin < 2 ) || isempty( Fname )
+                %----------------------------------------------------------
+                % Prompt user to select file
+                %----------------------------------------------------------
+                [ Fname, Path ] = uigetfile( "*.mat",...
+                        "Enter name of file defining PN distribution data",...
+                        "PNdata.mat", "MultiSelect", "off");
+                Fname = fullfile( Path, Fname );
+            end
+            Ok = ( exist( Fname, "file" ) == 2 );
+            assert( Ok, 'File "%s" does cannot be found', Fname );
+            obj.PNdist = load( Fname );
+        end % loadPNdistDataFile 
 
         function obj = loadIdentificationData( obj, Fname, Varname )
             %--------------------------------------------------------------
