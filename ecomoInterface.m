@@ -21,7 +21,7 @@ classdef ecomoInterface < handle
 
     properties ( SetAccess = protected, Dependent = true )
         BestFM         FoulingModel                                         % Best simulation object
-        Problem        String                                               % Problem type
+        Problem        optimisationType                                     % Problem type
     end % dependent properties
 
     properties ( Access = private, Dependent = true )
@@ -220,12 +220,14 @@ classdef ecomoInterface < handle
             %
             % Input Arguments:
             %
-            % M --> (logical) set to true for a maximisation problem, and
-            %                 false for a minimisation problem.
+            % M --> (string) set to either "Maximisation" or "Minimisation" 
+            %                as appropriate. Default is "Maximisation".
             %--------------------------------------------------------------
             arguments
                 obj (1,1) ecomoInterface  { mustBeNonempty( obj ) }
-                M   (1,1) logical                                           = true
+                M   (1,1) string          { mustBeMember( M, ...
+                                            ["Maximisation",...
+                                             "Minimisation"] ) }            = "Maximisation"
             end
             obj.B = obj.B.setProblemTypeState( M );
         end % setProblemType
