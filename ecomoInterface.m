@@ -6,23 +6,139 @@ classdef ecomoInterface < handle
     end
 
     properties ( SetAccess = protected )
-        Src    (1,1)                                                        % Event source
-        Lh     (1,1)                                                        % Listener handle for RUN_EXPERIMENT event
-        FM     (1,:)   FoulingModel                                         % ECOMO fouling model object array
-        IDdata (1,1)   string                                               % Name of identification data file
-        B      (1,1)   bayesOpt                                             % bayesOpt object
-        Data   (1,1)   struct                                               % Identification training data
+        Src         (1,1)                                                   % Event source
+        Lh          (1,1)                                                   % Listener handle for RUN_EXPERIMENT event
+        FM          (1,:) FoulingModel                                      % ECOMO fouling model object array
+        IDdata      (1,1) string                                            % Name of identification data file
+        B           (1,1) bayesOpt                                          % bayesOpt object
+        Data        (1,1) struct                                            % Identification training data
+        PNdist      (1,1) struct                                            % PN distribution data
+        NumTube     (1,1) double   = 35                                     % Number of heat exchanger tubes
+        DuctGeo     (1,1) string   = "Circle"                               % Duct geometry
+        TubeLen     (1,1) double   = 185                                    % Tube length in [mm]
+        HydDiam     (1,1) double   = 4.5                                    % Hydraulic diameter of the wetted tube [mm]
+        ConfigFile  (1,1) string                                            % ECOMO model configuration file
     end
+
+    properties ( Constant = true )
+        X_H2O   (1,1)   double = 0.04508                                    % Molar fraction of water vapour present in exhaust gas
+    end % Constant properties
 
     properties ( SetAccess = protected, Dependent = true )
         BestFM         FoulingModel                                         % Best simulation object
-        Problem        String                                               % Problem type
+        Problem        string                                               % Problem type
     end % dependent properties
 
     properties ( Access = private, Dependent = true )
     end
 
     methods
+
+        function obj = setHydDiam( obj, Dia )
+            %--------------------------------------------------------------
+            % Set the internal hydraulic diameter of the tube [mm]
+            %
+            % obj = obj.setHydDiam( Dia );
+            %
+            % Input Arguments:
+            %
+            % Dia --> (doubleI Tube inner diameter [mm]
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Dia (1,1) double         { mustBePositive( Dia ) }  = 4.5
+            end
+            obj.HydDiam = Dia; 
+        end % setHydDiam
+
+        function obj = setTubeLength( obj, Len )
+            %--------------------------------------------------------------
+            % Set the length of the heat exchanger tubes
+            %
+            % obj = obj.setTubeLength( Len );
+            %
+            % Input Arguments:
+            %
+            % len   --> (double) lengthr of heat exchanger tubes [mm]
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Len (1,1) double         { mustBePositive( Len ) }
+            end
+            obj.TubeLen = Len;        
+        end % setTubeLength
+
+        function obj = setDuctShape( obj, Geo )
+            %--------------------------------------------------------------
+            % Set the geometric shape of the interior tube geometry. 
+            %
+            % obj = obj.setDuctShape( Geo );
+            %
+            % Input Arguments:
+            %
+            % Geo --> (string) Must be "Circle", "Square" or "Rectangular"
+            %--------------------------------------------------------------
+            arguments 
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Geo (1,1) string { mustBeMember( Geo,...
+                                   ["Circle", "Square", "Rectangular"]) } = "Circle"
+            end
+            obj.DuctGeo = ductGeometry( Geo );
+        end % setDuctShape
+
+        function obj = setNumberOfTubes( obj, Num )
+            %--------------------------------------------------------------
+            % Set the number of heat exchanger tubes
+            %
+            % obj = obj.setNumberOfTubes( Num );
+            %
+            % Input Arguments:
+            %
+            % Num   --> (int8) number of heat exchanger tubes
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Num (1,1) int8 = 35;
+            end
+            obj.NumTube = Num;
+        end % setNumberOfTubes
+
+        function [ BoundCond, ModelPara, Options ] = initialisation( obj )
+            %--------------------------------------------------------------
+            % Create the three structures required to configure and run an
+            % ECOMO simulation:
+            %
+            % [ BoundCond, ModelPara, Options ] = obj.initialisation()
+            %
+            % Notes: the user will be prompted for a MATLAB script defing
+            % the setup.
+            %--------------------------------------------------------------
+            arguments
+                obj  (1,1)  ecomoInterface   { mustBeNonempty( obj ) }
+            end
+            %--------------------------------------------------------------
+            % Pre-load the PN distribution data if required
+            %--------------------------------------------------------------
+            if isempty( obj.PNdist )
+                obj = obj.loadPNdistDataFile();                              
+            end
+            %--------------------------------------------------------------
+            % Load the configuration function if required
+            %--------------------------------------------------------------
+            if ( exist( obj.ConfigFile, 'File' ) ~= 2 )
+                [ Fname, Path ] = uigetfile( "*.m",...
+                "Select ECOMO Simulation Initialisation function",...
+                "ECOMO_sim_initialization.m", "MultiSelect","off");
+                obj.ConfigFile = fullfile( Path, Fname );
+            end
+            [ ~, Fname ] = fileparts( obj.ConfigFile );
+            Cmd = strjoin( [Fname, "( obj )"], "" );
+            %--------------------------------------------------------------
+            % Execute the configuration function
+            %--------------------------------------------------------------
+            [ BoundCond, ModelPara, Options ] = eval( Cmd );
+        end % initialisation
+
         function obj = defineBayesOpt( obj, Model, AcqFcn )
             %--------------------------------------------------------------
             % Set the bayesOpt object model type and acquisition function
@@ -41,6 +157,39 @@ classdef ecomoInterface < handle
             end
             obj.B = bayesOpt( Model, AcqFcn );
         end % defineBayesOpt
+
+        function obj = loadPNdistDataFile( obj, Fname )
+            %--------------------------------------------------------------
+            % Load the data file containing the PN distribution particle
+            % bin sizes and histogram relative frequencies. Store in
+            % property "PNdist".
+            %
+            % obj = obj.loadPNdistDataFile( Fname );
+            %
+            % Input Arguments:
+            %
+            % Fname --> (string) Full file name of PN distirbution values.
+            %           If not supplied, the code will prompt the user for
+            %           the file via the standard windows file selection
+            %           GUI
+            %--------------------------------------------------------------
+            arguments
+                obj     (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Fname   (1,:) string = string.empty( 1, 0)
+            end
+            if ( nargin < 2 ) || isempty( Fname )
+                %----------------------------------------------------------
+                % Prompt user to select file
+                %----------------------------------------------------------
+                [ Fname, Path ] = uigetfile( "*.mat",...
+                        "Enter name of file defining PN distribution data",...
+                        "PNdata.mat", "MultiSelect", "off");
+                Fname = fullfile( Path, Fname );
+            end
+            Ok = ( exist( Fname, "file" ) == 2 );
+            assert( Ok, 'File "%s" does cannot be found', Fname );
+            obj.PNdist = load( Fname );
+        end % loadPNdistDataFile 
 
         function obj = loadIdentificationData( obj, Fname, Varname )
             %--------------------------------------------------------------
@@ -84,12 +233,14 @@ classdef ecomoInterface < handle
             %
             % Input Arguments:
             %
-            % M --> (logical) set to true for a maximisation problem, and
-            %                 false for a minimisation problem.
+            % M --> (string) set to either "Maximisation" or "Minimisation" 
+            %                as appropriate. Default is "Maximisation".
             %--------------------------------------------------------------
             arguments
                 obj (1,1) ecomoInterface  { mustBeNonempty( obj ) }
-                M   (1,1) logical                                           = true
+                M   (1,1) string          { mustBeMember( M, ...
+                                            ["Maximisation",...
+                                             "Minimisation"] ) }            = "Maximisation"
             end
             obj.B = obj.B.setProblemTypeState( M );
         end % setProblemType
@@ -184,10 +335,7 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             % 1. Run the ECOMO model configuration function
             %--------------------------------------------------------------
-            [ BoundCond, ModelPara, Options ] = eval( SrcObj.ConfigFile );
-            BoundCond.L = SrcObj.TubeLength;                                % Define length of tube
-            BoundCond.D0 = SrcObj.TubeIntDia;                               % Define diameter of tube
-            BoundCond.IN_TimeSeries = obj.Data;                             % Load the identification data
+            [ BoundCond, ModelPara, Options ] = obj.initialisation( );
             %--------------------------------------------------------------
             % 2. Determine if all variables defined in the Parameter table
             %    in the DOE object are defined in the ModelPara structure.
@@ -234,7 +382,12 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             FSim = obj.BestFM;                                              % Retrieve the best simulation
             %--------------------------------------------------------------
-            % Now plot the results
+            % Plot the simulation results
+            %--------------------------------------------------------------
+            figure;
+            FSim.plot;
+            %--------------------------------------------------------------
+            % Plot the fit diagnostics
             %--------------------------------------------------------------
             figure;
             Ax( 4 ) = subplot(2,2,4);
@@ -252,9 +405,14 @@ classdef ecomoInterface < handle
                     plot( obj.Data.T_g_out, obj.Data.deltaP, 'g+');
                 end
             end
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            % To Do : Generalise the plotting
-            %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            %--------------------------------------------------------------
+            % Retrieve design object
+            %--------------------------------------------------------------
+            Dobj = obj.Src.DesObj;
+            %--------------------------------------------------------------
+            % Allow for either single value or distributed parameters
+            %--------------------------------------------------------------
+            
             X = FSim.ModelPara.k_d(:,1);
             Xi = linspace( min( X ), max( X ), 1001 );
             Y = FSim.ModelPara.k_d(:,2);
@@ -544,6 +702,7 @@ classdef ecomoInterface < handle
             H = obj.Src.DesObj.Factors.Hi;                                  % High limit for each factor
             NumColsDesign = size( obj.Src.DesObj.Design, 2 );               % Number of parameters identified
             [ Lo, Hi ] = deal( zeros( 1, NumColsDesign ) );
+            Name = string( obj.Src.DesObj.DesignInfo.Properties.RowNames );
             for Q = 1:obj.Src.NumFactors
                 %----------------------------------------------------------
                 % Generate the limit vectors one factor at a time
@@ -556,11 +715,29 @@ classdef ecomoInterface < handle
                 if iscell( Knots )
                     Knots = Knots{ : };
                 end
-                Lo( Coeff ) = repmat( L( Q ), size( Coeff ) );
-                Hi( Coeff ) = repmat( H( Q ), size( Coeff ) ); 
+                Tlo = reshape( L{ Q }, 1, numel( L{ Q } ) );
+%                 if ( numel( Tlo) == 1 ) &&  ( numel( Coeff ) > 1 )
+%                     Tlo = repmat( Tlo, size( Coeff ) );
+%                 end                    
+                Lo( Coeff ) = Tlo;
+                Thi = reshape( H{ Q }, 1, numel( H{ Q } ) );
+%                 if ( numel( Thi) == 1 ) &&  ( numel( Coeff ) > 1 )
+%                     Thi = repmat( Thi, size( Coeff ) );
+%                 end                
+                Hi( Coeff ) = Thi; 
                 if ~isnan( Knots )
-                    Lo( Knots ) = repmat( 0.1 * obj.Src.DesObj.TubeLength, size( Knots ) );
-                    Hi( Knots ) = repmat( 0.9 * obj.Src.DesObj.TubeLength, size( Knots ) );
+                    %------------------------------------------------------
+                    % Determine knot parameter and limits
+                    %------------------------------------------------------
+                    S = obj.Src.DesObj.Factors{ Name( Q ), "Spline" };
+                    S = S{ : };
+                    if isempty(S.X) || matches( S.X, "x")
+                        Lo( Knots ) = repmat( 0.05 * obj.TubeLen / 1000, size( Knots ) );
+                        Hi( Knots ) = repmat( 0.95 * obj.TubeLen / 1000, size( Knots ) );
+                    else
+                        Lo( Knots ) = repmat( S.Xlo, size( Knots ) );
+                        Hi( Knots ) = repmat( S.Xhi, size( Knots ) );
+                    end
                 end
             end % /Q
         end % fetchLimits
@@ -640,7 +817,7 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             % Define logical parameter vector
             %--------------------------------------------------------------
-            Pidx = contains( S.Type, "Parameter");
+            Pidx = matches( S.Type, "Parameter");
             %--------------------------------------------------------------
             % Parse the parameter and boundary condition structures
             %--------------------------------------------------------------
