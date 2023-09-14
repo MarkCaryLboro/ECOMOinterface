@@ -144,5 +144,4 @@ function [ BoundCond, ModelPara, Options ] = ECOMO_sim_initialization( E )
     % Define the deposit soot layer porosity, [0,100) (0 is solid)
     %----------------------------------------------------------------------
     ModelPara.fai = 98;
-
 end % ECOMO_sim_initialization
