@@ -28,40 +28,46 @@ function [ C, Ceq ] = ecomoBsplineConstraintHandler( Theta, D )
         Con = D.Bspline.Constraint;
         Names = string( D.Bspline.Properties.RowNames );
         N = numel( Names );
-        %----------------------------------------------------------------------
+        %------------------------------------------------------------------
         % Retain only splines with active constraints
-        %----------------------------------------------------------------------
+        %------------------------------------------------------------------
         ConIdx = ~cellfun( @isempty, Con );
-        %----------------------------------------------------------------------
+        %------------------------------------------------------------------
         % Decode the design
-        %----------------------------------------------------------------------
+        %------------------------------------------------------------------
         Theta = D.decodeDesign( Theta );
         for Q = 1:N
             if ConIdx( Q )
-                %--------------------------------------------------------------
+                %----------------------------------------------------------
+                % Retrieve the B-spline object
+                %----------------------------------------------------------
+                B = D.Bspline{ Names( Q ), "Object" };
+                %----------------------------------------------------------
                 % Set the x-points to evaluate the constraint at
-                %--------------------------------------------------------------
-                Idx = contains( D.Factors.Properties.RowNames, Con{ Q }.name );
-                Inc = max( D.Factors.Sz( Idx, : ) );
-                X = linspace( 0, D.TubeLength, Inc ).';
+                %----------------------------------------------------------
+                X = linspace( B.a, B.b, 101 ).';
                 %--------------------------------------------------------------
                 % Evaluate the nonlinear constraint
                 %--------------------------------------------------------------
-                B = D.Bspline{ Con{ Q }.name, "Object" };
-                Kidx = D.DesignInfo{ Con{ Q }.name,  "Knots" };
+                Kidx = D.DesignInfo{ Names( Q ),  "Knots" };
                 if iscell( Kidx )
                     Kidx = Kidx{ : };
                 end
                 Knot = Theta( Kidx );
-                Cidx = D.DesignInfo{ Con{ Q }.name,  "Coefficients" };
+                Cidx = D.DesignInfo{ Names( Q ),  "Coefficients" };
                 if iscell( Cidx )
                     Cidx = Cidx{ : };
                 end
                 Coef = Theta( Cidx );
                 B.n = Knot;
                 B.alpha = Coef;
-                ApplyConstraint = ~( isempty(Con{ Q }.type) &...
-                    isempty(Con{ Q }.derivative) );
+                %----------------------------------------------------------
+                % Constrained if multiple dimensional structure
+                ApplyConstraint = ( max( size( Con{ Q } ) ) > 1 );
+                if ~ApplyConstraint
+                    ApplyConstraint = ~( isempty(Con{ Q }.type) &...
+                        isempty(Con{ Q }.derivative) );
+                end
                 if ApplyConstraint
                     [ C, Ceq ] = B.evalNonlinConstraints( X, Con{ Q } );
                 end

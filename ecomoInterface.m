@@ -10,7 +10,7 @@ classdef ecomoInterface < handle
         Lh          (1,1)                                                   % Listener handle for RUN_EXPERIMENT event
         FM          (1,:) FoulingModel                                      % ECOMO fouling model object array
         IDdata      (1,1) string                                            % Name of identification data file
-        B           (1,1) bayesOpt                                          % bayesOpt object
+        B           (1,1) bayesOpt = bayesOpt( "gpr", "ucb" )               % bayesOpt object
         Data        (1,1) struct                                            % Identification training data
         PNdist      (1,1) struct                                            % PN distribution data
         NumTube     (1,1) double   = 35                                     % Number of heat exchanger tubes
@@ -33,7 +33,6 @@ classdef ecomoInterface < handle
     end
 
     methods
-
         function obj = setHydDiam( obj, Dia )
             %--------------------------------------------------------------
             % Set the internal hydraulic diameter of the tube [mm]
@@ -521,7 +520,9 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             % Run the configuration file to define the parameters
             %--------------------------------------------------------------
-            [ BoundCond, ModelPara, Options ] = eval( H.ConfigFile );
+            [ ~, Cmd ] = fileparts( obj.ConfigFile );
+            Cmd = strjoin( [ Cmd,"( obj )"], "" );
+            [ BoundCond, ModelPara, Options ] = eval( Cmd );
             for Q = 1:NumFactors
                 %----------------------------------------------------------
                 % Overwrite the parameters and boundary conditions as
@@ -698,8 +699,10 @@ classdef ecomoInterface < handle
             % [ Lo, Hi ] = obj.fetchLimits();
             %--------------------------------------------------------------
             Info = obj.Src.DesObj.DesignInfo;                               % Retrieve pointers to variables
-            L = obj.Src.DesObj.Factors.Lo;                                  % Low limit for each factor
+            L = obj.Src.DesObj.Factors.Lo;                                  % Low limit for each factor 
+            L = obj.ensureIsCell( L );
             H = obj.Src.DesObj.Factors.Hi;                                  % High limit for each factor
+            H = obj.ensureIsCell( H );
             NumColsDesign = size( obj.Src.DesObj.Design, 2 );               % Number of parameters identified
             [ Lo, Hi ] = deal( zeros( 1, NumColsDesign ) );
             Name = string( obj.Src.DesObj.DesignInfo.Properties.RowNames );
@@ -715,22 +718,18 @@ classdef ecomoInterface < handle
                 if iscell( Knots )
                     Knots = Knots{ : };
                 end
-                Tlo = reshape( L{ Q }, 1, numel( L{ Q } ) );
-%                 if ( numel( Tlo) == 1 ) &&  ( numel( Coeff ) > 1 )
-%                     Tlo = repmat( Tlo, size( Coeff ) );
-%                 end                    
+                Tlo = reshape( L{ Q }, 1, numel( L{ Q } ) );                   
                 Lo( Coeff ) = Tlo;
-                Thi = reshape( H{ Q }, 1, numel( H{ Q } ) );
-%                 if ( numel( Thi) == 1 ) &&  ( numel( Coeff ) > 1 )
-%                     Thi = repmat( Thi, size( Coeff ) );
-%                 end                
+                Thi = reshape( H{ Q }, 1, numel( H{ Q } ) );             
                 Hi( Coeff ) = Thi; 
                 if ~isnan( Knots )
                     %------------------------------------------------------
                     % Determine knot parameter and limits
                     %------------------------------------------------------
                     S = obj.Src.DesObj.Factors{ Name( Q ), "Spline" };
-                    S = S{ : };
+                    if iscell( S )
+                        S = S{ : };
+                    end
                     if isempty(S.X) || matches( S.X, "x")
                         Lo( Knots ) = repmat( 0.05 * obj.TubeLen / 1000, size( Knots ) );
                         Hi( Knots ) = repmat( 0.95 * obj.TubeLen / 1000, size( Knots ) );
@@ -871,5 +870,22 @@ classdef ecomoInterface < handle
             PidxLo = ( Lo >= 0 );
             PidxHi = ( Hi >= 0);
         end % getPositive
+
+        function Lim = ensureIsCell( L )
+            %--------------------------------------------------------------
+            % Ensure theoutput is a cell array
+            %
+            % Lim = obj.ensureIsCell( L );
+            %
+            % Input Arguments:
+            %
+            % L --> (double) input array
+            %--------------------------------------------------------------
+            if iscell( L )
+                Lim = L;
+            else
+                Lim = num2cell( L );
+            end
+        end % ensureIsCell
     end % protected and static methods
 end % classdef
