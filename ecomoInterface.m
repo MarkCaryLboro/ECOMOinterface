@@ -17,7 +17,12 @@ classdef ecomoInterface < handle
         DuctGeo     (1,1) string   = "Circle"                               % Duct geometry
         TubeLen     (1,1) double   = 185                                    % Tube length in [mm]
         HydDiam     (1,1) double   = 4.5                                    % Hydraulic diameter of the wetted tube [mm]
+    end
+
+    properties 
         ConfigFile  (1,1) string                                            % ECOMO model configuration file
+        UseParallel (1,1) logical = true
+        ShowWaitbar (1,1) logical = true
     end
 
     properties ( Constant = true )
@@ -301,6 +306,12 @@ classdef ecomoInterface < handle
                 @( SrcObj, Evnt )obj.eventCbRun( SrcObj, Evnt ) );           
         end % ecomoInterface
 
+
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        % NOTE: this method was modified by MathWorks to show an example of
+        % how parallel computing can be leveraged to run simulations in
+        % parallel in a parfor loop instead of a for loop.
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%        
         function obj = eventCbRun( obj, SrcObj, Evnt )
             %--------------------------------------------------------------
             % Callback for the RUN_EXPERIMENT event
@@ -342,37 +353,84 @@ classdef ecomoInterface < handle
             % 3. Loop through the data and run the requested simulations
             %--------------------------------------------------------------
             N = find( ~SrcObj.ParTable.Simulated, height( SrcObj.ParTable));
-            F = waitbar( 0, 'DoE Simulation Progress' );
+            F = waitbar(0, 'DoE Simulation Progress');
             MaxN = max( N );
             Nx = numel( N );
-            FMarray = repmat( FoulingModel.empty, 1, Nx );
-            for Q = 1:Nx
-                %----------------------------------------------------------
-                % Simulate new conditions
-                %----------------------------------------------------------
-                Idx = N( Q );
-                Msg = sprintf( 'Simulation %4.0f out of %4.0f', Idx,...
-                                                                MaxN );
-                waitbar( Idx / MaxN, F, Msg );
-                [ ModelParaTmp, BoundCondTmp ] = ecomoInterface.parameterCheck( ...
-                    ModelPara, BoundCond, SrcObj, Idx );
-                FMarray( Q ) = ecomoInterface.runSimulation( ModelParaTmp,...
-                                    BoundCondTmp, Options );
-                SrcObj.setSimulated( Idx, true );
-            end % Q     
+            
+            % Initialise array of Fouling model objects.
+            FMarray = cell(1, Nx );
+
+            % Extract properties of interest from the DoEhook, so that the
+            % we do not need the full DoEhook object within the parfor
+            % loop.
+            parTable = SrcObj.ParTable;
+            type = SrcObj.Type;
+
+            % Simulate new conditions, serially or in parallel.
+            if obj.UseParallel 
+
+                % Create DataQueue and listener for waitbar.
+                D = parallel.pool.DataQueue;
+                afterEach(D, @parforWaitbar);
+                parforWaitbar(F, MaxN) % Initialise waitbar.
+
+                % Run simulations in parallel.
+                parfor Q = 1:Nx
+                    Idx = N( Q );
+
+                    % Call the updated parameterCheck method.
+                    [ModelParaTmp, BoundCondTmp] = ecomoInterface.parameterCheck_Updated( ...
+                        ModelPara, BoundCond, Idx, parTable, type);
+
+                    % Run the Fouling model simulation and assign the
+                    % object in the correct index in the Fouling model
+                    % array.
+                    FMarray{Q}  = ecomoInterface.runSimulation(ModelParaTmp,...
+                        BoundCondTmp, Options);
+                    send(D, []); % update waitbar
+                end
+
+                % No need to do this within the parfor loop.
+                for Q = 1:Nx
+                    Idx = N( Q );
+                    SrcObj.setSimulated(Idx, true);
+                end
+
+            else
+
+                % Run simulations serially.
+                for Q = 1:Nx
+                    Idx = N( Q );
+                    msg = sprintf('Simulation %4.0f out of %4.0f', Idx, MaxN);
+                    waitbar(Idx / MaxN, F, msg);
+
+                    [ModelParaTmp, BoundCondTmp] = ecomoInterface.parameterCheck( ...
+                        ModelPara, BoundCond, SrcObj, Idx);
+                    FMarray{Q}  = ecomoInterface.runSimulation(ModelParaTmp,...
+                        BoundCondTmp, Options);
+                    SrcObj.setSimulated(Idx, true);
+                end
+
+            end
+
+            % Convert Fouling model cell array to a normal array.
+            FMarray = [FMarray{:}];
+
             if isempty( obj.FM )
                 obj.FM = FMarray;
             else
                 obj.FM = [ obj.FM, FMarray ];
             end
-            delete( F );
+            
+            delete(F); % close waitbar.
+
             %--------------------------------------------------------------
             % Process data and export the results
             %--------------------------------------------------------------
             Res = obj.processResiduals();
             obj = obj.exportData( Res );
+            
         end % eventCbRun
-
         function plotBestSimulation( obj )
             %--------------------------------------------------------------
             % Plot the best simulation results
@@ -405,13 +463,8 @@ classdef ecomoInterface < handle
                 end
             end
             %--------------------------------------------------------------
-            % Retrieve design object
-            %--------------------------------------------------------------
-            Dobj = obj.Src.DesObj;
-            %--------------------------------------------------------------
             % Allow for either single value or distributed parameters
             %--------------------------------------------------------------
-            
             X = FSim.ModelPara.k_d(:,1);
             Xi = linspace( min( X ), max( X ), 1001 );
             Y = FSim.ModelPara.k_d(:,2);
@@ -852,6 +905,76 @@ classdef ecomoInterface < handle
             end % Q
         end % parameterCheck
 
+        
+        
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        % NOTE: this method was introduced by MathWorks as part of the
+        % review, as an example of how the "parameterCheck" method could be
+        % modified so that the DoEhook object is no longer a broadcast
+        % variable in the parfor loop.
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        function [ P, Bc ] = parameterCheck_Updated( M, B, R, T, type)
+            %--------------------------------------------------------------
+            % Return 2 structures containing all the identification
+            % parameter and boundary condition fields. Add to the fields if 
+            % necessary. Populate fields for identification with row R of 
+            % the source parameter table.
+            % 
+            % [ P, B ] = obj.parameterCheck( M, B, S, R );
+            %
+            % Input Arguments:
+            %
+            % M  --> (struct)  ECOMO model parameter structure
+            % B  --> (struct)  ECOMO model boundary conditions structure
+            % S  --> (DoEhook) Event source object
+            % R  --> (double)  DoE run to load 
+            %
+            % Output Arguments:
+            %
+            % P  --> (struct) Idenification parameter structure
+            % Bc --> (struct) Boundary condition structure
+            %--------------------------------------------------------------
+            if ( nargin < 3 )
+                R = 1;                                                      % apply default
+            end
+            %--------------------------------------------------------------
+            % Define logical parameter vector
+            %--------------------------------------------------------------
+            Pidx = matches( type, "Parameter");
+            %--------------------------------------------------------------
+            % Parse the parameter and boundary condition structures
+            %--------------------------------------------------------------
+            P = M;
+            Bc = B;
+            IdNames = string( T.Properties.VariableNames );
+            Idx = ~contains( IdNames, "Simulated" );
+            IdNames = IdNames( Idx );
+            N = numel( IdNames );
+            for Q = 1:N
+                %----------------------------------------------------------
+                % Add the field to the structure
+                %----------------------------------------------------------
+                Val = T{ R, IdNames( Q ) };
+                if iscell( Val )
+                    Val = cell2mat( Val );
+                end
+                %----------------------------------------------------------
+                % Overwrite all parameters
+                %----------------------------------------------------------
+                if Pidx( Q )
+                    %------------------------------------------------------
+                    % Identification Parameter
+                    %------------------------------------------------------
+                    P.( IdNames{ Q } ) = Val;
+                else
+                    %------------------------------------------------------
+                    % Identification Parameter
+                    %------------------------------------------------------                    
+                    Bc.( IdNames{ Q } ) = Val;
+                end
+            end % Q
+        end % parameterCheck
+        
         function [ PidxLo, PidxHi ] = getPositive( Lo, Hi )
             %--------------------------------------------------------------
             % Return logical pointers to establish sign of low and high
@@ -889,3 +1012,31 @@ classdef ecomoInterface < handle
         end % ensureIsCell
     end % protected and static methods
 end % classdef
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% NOTE: this helper function was introduced by MathWorks as an example of a
+% simple function that displays a waitbar of progress of parallel
+% simulations.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function parforWaitbar(waitbarHandle, iterations)
+    persistent count h N
+    
+    msg = sprintf('Simulation %4.0f out of %4.0f', count, N);
+    
+    if nargin == 2
+        % Initialize
+    
+        count = 0;
+        h = waitbarHandle;
+        N = iterations;
+    else
+        % Update the waitbar
+    
+        % Check whether the handle is a reference to a deleted object
+        if isvalid(h)
+            count = count + 1;
+            waitbar(count / N, h, msg);
+        end
+    end
+end
