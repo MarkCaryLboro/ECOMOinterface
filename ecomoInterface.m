@@ -30,6 +30,7 @@ classdef ecomoInterface < handle
     end % Constant properties
 
     properties ( SetAccess = protected, Dependent = true )
+        BestIdx        int64                                                % Pointer to best simulation
         BestFM         FoulingModel                                         % Best simulation object
         Problem        string                                               % Problem type
     end % dependent properties
@@ -304,7 +305,7 @@ classdef ecomoInterface < handle
             obj.Src = Src;
             obj.Lh = addlistener( Src, "RUN_EXPERIMENT",...
                 @( SrcObj, Evnt )obj.eventCbRun( SrcObj, Evnt ) );           
-        end % ecomoInterface
+        end % addRunExperimentListener
 
 
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -429,15 +430,27 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             Res = obj.processResiduals();
             obj = obj.exportData( Res );
-            
         end % eventCbRun
-        function plotBestSimulation( obj )
+
+        function plotFitDiagnostics( obj, SimNum )
             %--------------------------------------------------------------
             % Plot the best simulation results
             %
-            % obj.plotBestSimulation();
+            % obj.plotFitDiagnostics( SimNum );
+            %
+            % Input Arguments:
+            %
+            % SimNum --> (int64) Simulation number to plot. Default is the
+            %                    best simulation
             %--------------------------------------------------------------
-            FSim = obj.BestFM;                                              % Retrieve the best simulation
+            arguments
+                obj     (1,1) ecomoInterface
+                SimNum  (1,1) int64                                         = obj.BestIdx
+            end
+            %--------------------------------------------------------------
+            % Retrieve the desired simulation
+            %--------------------------------------------------------------
+            FSim = obj.FM( SimNum );                                              
             %--------------------------------------------------------------
             % Plot the simulation results
             %--------------------------------------------------------------
@@ -603,14 +616,26 @@ classdef ecomoInterface < handle
             save( Fname, "FM", "BoundCond", "ModelPara", "Options" );
         end % exportParameters
 
-        function plotTimeSeries( obj )
+        function plotTimeSeries( obj, SimNum )
             %--------------------------------------------------------------
             % Plot the model predictions versus the identification data as
             % a time series.
             %
-            % obj.plotTimeSeries();
+            % obj.plotTimeSeries( SimNum );
+            %
+            % Input Arguments:
+            %
+            % SimNum --> (int64) Simulation number to plot. Default is the
+            %                    best simulation
             %--------------------------------------------------------------
-            FSim = obj.BestFM;                                              % Retrieve the best simulation
+            arguments
+                obj    (1,1) ECOMOuserInterface { mustBeNonempty( obj ) }
+                SimNum (1,1) int64              { mustBePositive( SimNum) } = obj.BestIdx
+            end
+            %--------------------------------------------------------------
+            % Retrieve the simulation
+            %--------------------------------------------------------------
+            FSim = obj.FM( SimNum );                                        
             %--------------------------------------------------------------
             % Define signals to plot
             %--------------------------------------------------------------
@@ -709,6 +734,11 @@ classdef ecomoInterface < handle
     end % Ordinary methods
 
     methods
+        function Idx = get.BestIdx( obj )
+            % Return the pointer to the best simulation
+            Idx = obj.B.Bidx;
+        end % get.BestIdx
+
         function F = get.BestFM( obj )
             % Return best fouling model simulation
             Ptr = obj.B.Bidx;                                               % Point to the best simulation
