@@ -629,7 +629,7 @@ classdef ecomoInterface < handle
             %                    best simulation
             %--------------------------------------------------------------
             arguments
-                obj    (1,1) ECOMOuserInterface { mustBeNonempty( obj ) }
+                obj    (1,1) ecomoInterface     { mustBeNonempty( obj ) }
                 SimNum (1,1) int64              { mustBePositive( SimNum) } = obj.BestIdx
             end
             %--------------------------------------------------------------
