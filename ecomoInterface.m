@@ -17,12 +17,15 @@ classdef ecomoInterface < handle
         DuctGeo     (1,1) string   = "Circle"                               % Duct geometry
         TubeLen     (1,1) double   = 185                                    % Tube length in [mm]
         HydDiam     (1,1) double   = 4.5                                    % Hydraulic diameter of the wetted tube [mm]
+        CostFcn     (1,1) costFcnType = "Combined"                          % Configure cost function
     end
 
     properties 
         ConfigFile  (1,1) string                                            % ECOMO model configuration file
         UseParallel (1,1) logical = true
         ShowWaitbar (1,1) logical = true
+        Trim        (1,1) logical = true
+        TrimPct     (1,1) double { mustBeInRange( TrimPct, 0, 0.25) }        = 0.15
     end
 
     properties ( Constant = true )
@@ -33,6 +36,7 @@ classdef ecomoInterface < handle
         BestIdx        int64                                                % Pointer to best simulation
         BestFM         FoulingModel                                         % Best simulation object
         Problem        string                                               % Problem type
+        InitialSize    double                                               % Size of initial surrogate model training DoE
     end % dependent properties
 
     properties ( Access = private, Dependent = true )
@@ -55,6 +59,26 @@ classdef ecomoInterface < handle
             end
             obj.HydDiam = Dia; 
         end % setHydDiam
+
+        function obj = setCostFcn( obj, Fcn )
+            %--------------------------------------------------------------
+            % Set the cost function type to either "Combined",
+            % "Temperature" or "Pressure"
+            %
+            % obj = obj.setCostFcn( Fcn )
+            %
+            % Input Arguments:
+            %
+            % Fcn --> (string) Cost function type: "Combined",
+            %                  "Temperature" or "Pressure"
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Fcn (1,1) string = "Combined"
+            end
+            Fcn = costFcnType( Fcn );
+            obj.CostFcn = Fcn;
+        end % setCostFcn
 
         function obj = setTubeLength( obj, Len )
             %--------------------------------------------------------------
@@ -511,8 +535,104 @@ classdef ecomoInterface < handle
             plot( Xi, interp1( X, Y, Xi, 'spline' ), 'LineWidth', 2.0 );
             legend( Ax(4), '\phi(x,0)', '\phi(x,t_{end})', '\Xi', 'Location',...
                 'northoutside', 'Orientation', 'horizontal');
-        end % plotBestSimulation
+        end % plotFitDiagnostics
+
+        function plotResiduals( obj, SimNum )
+            %--------------------------------------------------------------
+            % Residual plots for the selected simulation
+            %
+            % obj.plotResiduals( SimNum );
+            %
+            % Input Arguments:
+            %
+            % SimNum --> (int64) Simulation number to plot. Default is the
+            %                    best simulation
+            %--------------------------------------------------------------
+            arguments
+                obj     (1,1) ecomoInterface
+                SimNum  (1,1) int64                                         = obj.BestIdx
+            end
+            %--------------------------------------------------------------
+            % Retrieve the desired simulation
+            %--------------------------------------------------------------
+            FSim = obj.FM( SimNum );                                              
+            figure;
+            for  Q = 4:-1:1
+                Ax( Q ) = subplot( 2, 2, Q);
+                switch Q
+                    case 1
+                        %--------------------------------------------------
+                        % Temperature residual versus time
+                        %--------------------------------------------------
+                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
+                        obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
+                        xlabel( "Time [s]" );
+                        ylabel( "Outlet Temperature Residual [^oC]" );
+                    case 2
+                        %--------------------------------------------------
+                        % Temperature residual versus predicted
+                        %--------------------------------------------------
+                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
+                        Yhat = FSim.T_out_L_degC;
+                        obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
+                        xlabel( "Predicted Outlet Temperature [^oC]");
+                        ylabel( "Outlet Temperature Residual [^oC]" );
+                    case 3
+                        %--------------------------------------------------
+                        % Pressure residuals versus time
+                        %--------------------------------------------------
+                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
+                        obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
+                        xlabel( "Time [s]" );
+                        ylabel( "Residual \Deltapressure [kPa]");
+                    otherwise
+                        %--------------------------------------------------
+                        % Pressure residuals versus predicted
+                        %--------------------------------------------------
+                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
+                        Yhat = FSim.deltaPre_L_kPa;
+                        obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
+                        xlabel( "Predicted \Deltapressure [kPa]");
+                        ylabel( "Residual \Deltapressure [kPa]");
+                end
+                Ax( Q ).GridAlphaMode = "manual";
+                Ax( Q ).GridAlpha = 0.75;
+                Ax( Q ).GridLineStyle = "-.";
+                Ax( Q ).XGrid = "on";
+                Ax( Q ).YGrid = "on";
+            end
+        end % plotResiduals
         
+        function plotBayesOpt( obj )
+            %--------------------------------------------------------------
+            % Plot the Bayesian Optimisation acquisition function results
+            %
+            % obj.plotBayesOpt();
+            %--------------------------------------------------------------
+            figure;
+            X = 1:obj.InitialSize;
+            Ax = axes;
+            Ax.NextPlot = "add";
+            plot( Ax, X, obj.B.Y( X ), 'bo:', 'LineWidth', 2,...
+                                              'MarkerFaceColor', 'blue' );
+            X = ( obj.InitialSize + 1 ):obj.Src.NumPoints;
+            plot( Ax, X, obj.B.Y( X ), 'rs-', 'LineWidth', 2,...
+                                              'MarkerFaceColor', 'red' );
+            plot( Ax, obj.BestIdx, obj.B.Y( obj.BestIdx ), 'gh',... 
+                                              'MarkerFaceColor', 'green', ...
+                                              'MarkerSize', 10 );
+            grid on;
+            Ax.GridAlpha = 0.5;
+            Ax.GridAlphaMode = "Manual";
+            Ax.GridLineStyle = "--";
+            legend( "Training", "BOpt", "Best", "location", "best",...
+                                                "FontSize", 12 );
+            title( Ax, "Bayesian Optimisation Solution Summary",...
+                       "FontSize", 16);
+            xlabel( Ax, "Solution Index", "FontSize", 14);
+            ylabel( Ax, "Cost Function", "FontSize", 14);
+        end % plotBayesOpt
+
         function F = runIdentifiedSimulation( obj, R, Cln )
             %--------------------------------------------------------------
             % Run an ECOMO model simulation with the identified parameters.
@@ -719,17 +839,41 @@ classdef ecomoInterface < handle
             DeltaP = [ obj.FM( : ).deltaPre_L_kPa ];                        % Delta pressure predictions from the simulation
             Tres = ( obj.Data.T_g_out - Tout );                             % Temperature residual matrix
             Pres = ( obj.Data.deltaP - DeltaP );                            % pressure residual matrix
+            %--------------------------------------------------------------
+            % Trim the residual data if desired. Remove the first
+            % x-percentage of the data.
+            %--------------------------------------------------------------
+            if obj.Trim
+                N =  size( Tres, 1 );
+                Ptr = floor( obj.TrimPct * N );
+                Ptr = Ptr:N;
+                Tres = Tres( Ptr, : );
+                Pres = Pres( Ptr, : );
+            end
             [ N, C ] = size( Tres );
             %--------------------------------------------------------------
             % Calculate normal negative loglikelihood
             %--------------------------------------------------------------
             L = zeros( C, 1 );
             for Q = 1:C
-                L( Q ) = 0.5 * N * ( log( Tres( :,Q ).' * Tres( :,Q ) ) +...
-                                log( Pres( :,Q ).' * Pres( :,Q ) ) );
+                switch obj.CostFcn
+                    case "Combined"
+                        %--------------------------------------------------
+                        % Identify pressure and temperature parameters
+                        % together
+                        %--------------------------------------------------
+                        L( Q ) = 0.5 * N * ( log( Tres( :,Q ).' * Tres( :,Q ) ) +...
+                            log( Pres( :,Q ).' * Pres( :,Q ) ) );
+                    case "Temperature"
+                        %--------------------------------------------------
+                        % Identify temerpature parameters only
+                        %--------------------------------------------------
+                        L( Q ) = 0.5 * N * ( log( Tres( :,Q ).' * Tres( :,Q ) ));
+                    case "Pressure"
+                        L( Q ) = 0.5 * N * ( log( Pres( :,Q ).' * Pres( :,Q ) ));
+                end
                 L( Q ) = N * log( 2 * pi ) + N + L( Q );
             end
-%             L = -L;
         end % processResiduals        
     end % Ordinary methods
 
@@ -749,6 +893,13 @@ classdef ecomoInterface < handle
             % Return the problem type
             P = obj.B.Problem;
         end % get.Problem
+
+        function S = get.InitialSize( obj )
+            % Return the size of the training data pool
+            S = obj.Src.Lh.Source;
+            S = S{ : };
+            S = S.InitialSize;
+        end % get.InitialSize
     end % Get/Set methods
 
     methods ( Access = protected )
@@ -835,6 +986,44 @@ classdef ecomoInterface < handle
     end % private methods
 
     methods ( Access = protected, Static = true )
+        function plotResidualVsPredicted( Yhat, Res, Ax)
+            %--------------------------------------------------------------
+            % Plot residuals versus the predicted value
+            %
+            % obj.plotResidualVsPredicted( Yhat, Res, Ax);
+            % 
+            % Input Arguments:
+            %
+            % Yhat  --> (double) Predicted vector
+            % Res   --> (double) residual vector
+            % Ax    --> (axes) Axes to plot on
+            %--------------------------------------------------------------
+            if ( nargin < 3 )
+                figure;
+                Ax = axes;
+            end
+            plot( Ax, Yhat, Res, 'bo', "MarkerFaceColor", "blue" );
+        end % plotResidualVsPredicted
+
+        function plotResidualsVstime( T, Res, Ax )
+            %--------------------------------------------------------------
+            % Plot residuals as a time series
+            %
+            % obj.plotResidualsVstime( T, Res, Ax );
+            %
+            % Input Arguments:
+            %
+            % T     --> (double) Time vector
+            % Res   --> (double) residual vector
+            % Ax    --> (axes) Axes to plot on
+            %--------------------------------------------------------------
+            if ( nargin < 3 )
+                figure;
+                Ax = axes;
+            end
+            plot( Ax, T, Res, 'bo', "MarkerFaceColor", "blue" );
+        end % plotResidualsVstime
+
         function S = repTimeSeries( S )
             %--------------------------------------------------------------
             % One replicate the identification data time series structure
