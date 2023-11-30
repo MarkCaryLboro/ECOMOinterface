@@ -42,13 +42,16 @@ function [ C, Ceq ] = ecomoBsplineConstraintHandler( Theta, D )
                 % Retrieve the B-spline object
                 %----------------------------------------------------------
                 B = D.Bspline{ Names( Q ), "Object" };
+                if iscell( B )
+                    B = B{ : };
+                end
                 %----------------------------------------------------------
                 % Set the x-points to evaluate the constraint at
                 %----------------------------------------------------------
                 X = linspace( B.a, B.b, 101 ).';
-                %--------------------------------------------------------------
+                %----------------------------------------------------------
                 % Evaluate the nonlinear constraint
-                %--------------------------------------------------------------
+                %----------------------------------------------------------
                 Kidx = D.DesignInfo{ Names( Q ),  "Knots" };
                 if iscell( Kidx )
                     Kidx = Kidx{ : };

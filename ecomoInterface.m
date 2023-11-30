@@ -18,6 +18,8 @@ classdef ecomoInterface < handle
         TubeLen     (1,1) double   = 185                                    % Tube length in [mm]
         HydDiam     (1,1) double   = 4.5                                    % Hydraulic diameter of the wetted tube [mm]
         CostFcn     (1,1) costFcnType = "Combined"                          % Configure cost function
+        NumCells    (1,1) double       = 10                                 % Number of computational cells
+        Clean       (1,1) logical      = true                               % Set to logical to indicate clean cooler
     end
 
     properties 
@@ -43,6 +45,43 @@ classdef ecomoInterface < handle
     end
 
     methods
+        function obj = setCleanCooler( obj, State )
+            %--------------------------------------------------------------
+            % Define the initial state of the cooler as either clean or
+            % pre-fouled
+            %
+            % obj = obj.setCleanCooler( State );
+            %
+            % Input Arguments:
+            %
+            % State --> (logical) Set to true (false) to indicate clean
+            %                     (pre-fouled) cooler.
+            %--------------------------------------------------------------
+            arguments
+                obj      (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                State    (1,1) logical = false
+            end
+            obj.Clean = State;
+        end % setCleanCooler
+
+        function obj = setNumCells( obj, NumCells )
+            %--------------------------------------------------------------
+            % Set the number of computational cellsused for the simulation
+            % runs
+            %
+            % obj = obj.setNumCells( NumCells );
+            %
+            % Input Arguments:
+            %
+            % NumCells --> (int64) Number of computational cells
+            %--------------------------------------------------------------
+            arguments
+                obj      (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                NumCells (1,1) double         { mustBePositive( NumCells ) }  = 4.5
+            end
+            obj.NumCells = NumCells;
+        end % setNumCells
+
         function obj = setHydDiam( obj, Dia )
             %--------------------------------------------------------------
             % Set the internal hydraulic diameter of the tube [mm]
@@ -186,6 +225,26 @@ classdef ecomoInterface < handle
             end
             obj.B = bayesOpt( Model, AcqFcn );
         end % defineBayesOpt
+
+        function obj = configureBOPTcoding( obj, Lo, Hi )
+            %--------------------------------------------------------------
+            % Configure the coding scheme for the Bayesian Optimisation
+            % object
+            %
+            % obj = obj.configureBOPTcoding( Lo, Hi );
+            %
+            % Input Arguments:
+            %
+            % Lo  --> (double) Low limits for parameters
+            % Hi  --> (double) High limits for parameters
+            %--------------------------------------------------------------
+            arguments
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Lo  (1,:) double         { mustBeNonempty( Lo ) }
+                Hi  (1,:) double         { mustBeNonempty( Hi ) }
+            end
+            obj.B = obj.B.conDataCoding( Lo, Hi );
+        end % configureBOPTcoding
 
         function obj = loadPNdistDataFile( obj, Fname )
             %--------------------------------------------------------------
@@ -401,6 +460,8 @@ classdef ecomoInterface < handle
 
                 % Run simulations in parallel.
                 parfor Q = 1:Nx
+%                 for Q = 1:Nx    % for debugging
+
                     Idx = N( Q );
 
                     % Call the updated parameterCheck method.
@@ -478,63 +539,7 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             % Plot the simulation results
             %--------------------------------------------------------------
-            figure;
             FSim.plot;
-            %--------------------------------------------------------------
-            % Plot the fit diagnostics
-            %--------------------------------------------------------------
-            figure;
-            Ax( 4 ) = subplot(2,2,4);
-            for Q = 1:4
-                Ax( Q ) = subplot(2,2,Q);  
-                Ax( Q ).NextPlot = "add";
-                grid on;
-                Ax( Q ).GridAlpha = 0.5;
-                Ax( Q ).GridLineStyle = ":";
-                if Q == 3
-                    %------------------------------------------------------
-                    % Add the identification data
-                    %------------------------------------------------------
-                    Ax( Q ).NextPlot = "add";
-                    plot( obj.Data.T_g_out, obj.Data.deltaP, 'g+');
-                end
-            end
-            %--------------------------------------------------------------
-            % Allow for either single value or distributed parameters
-            %--------------------------------------------------------------
-            X = FSim.ModelPara.k_d(:,1);
-            Xi = linspace( min( X ), max( X ), 1001 );
-            Y = FSim.ModelPara.k_d(:,2);
-            plot( Ax( 1 ), Xi, interp1( X, Y, Xi, 'spline' ), '-',...
-                                        'LineWidth', 2.0 );                 % Thermal conductivity
-            xlabel( Ax( 1 ), "Axial Distance [m]");
-            ylabel( Ax( 1 ), "Deposit Thermal Conductivity [W/K/m]");
-            X = FSim.ModelPara.rho_d(:,1);
-            Y = FSim.ModelPara.rho_d(:,2);
-            plot( Ax( 2 ), Xi, interp1( X, Y, Xi, 'spline' ), '-',...
-                                        'LineWidth', 2.0 );                 % Deposit density
-            xlabel( Ax( 2 ), "Axial Distance [m]");
-            ylabel( Ax( 2 ), "Deposit Density [kg/m^3]");            
-            plot( Ax( 3 ), FSim.T_out_L_degC, FSim.deltaPre_L_kPa, 's' );   % Temperature out versus delta pressure
-            xlabel( Ax( 3 ), "T_{out} [^oC]");
-            ylabel( Ax( 3 ), "\Deltap [kPa]")
-            legend( Ax( 3 ), "Data", "Model", "Location", "NorthWest" )
-            X = FSim.BoundCond.soot_phi0( :, 1 );
-            Y = 1000*FSim.BoundCond.soot_phi0( :, 2 );
-            Yend = 1000*FSim.phi_soot_tn1;
-            yyaxis( Ax( 4 ), 'left' );
-            plot( Ax( 4 ), Xi, interp1( X, Y, Xi, 'spline' ), 'b-',...
-                           Xi, interp1( X, Yend, Xi, 'spline' ), 'b:',...
-                           'LineWidth', 2.0 );                              % Deposit layer thickness
-            xlabel( Ax( 4 ), "Axial Distance [m]");
-            ylabel( Ax( 4 ), "\phi [mm]");
-            yyaxis( Ax( 4 ), 'right' );
-            X = linspace( 0, FSim.BoundCond.L, FSim.BoundCond.N_cell );
-            Y = FSim.r_HCs_soot_tn1;
-            ylabel( Ax( 4 ), 'HC/Soot ratio' );
-            plot( Xi, interp1( X, Y, Xi, 'spline' ), 'LineWidth', 2.0 );
-            legend( Ax(4), '\phi(x,0)', '\phi(x,t_{end})', '\Xi', 'Location',...
-                'northoutside', 'Orientation', 'horizontal');
         end % plotFitDiagnostics
 
         function plotResiduals( obj, SimNum )
@@ -627,8 +632,12 @@ classdef ecomoInterface < handle
             Ax.GridLineStyle = "--";
             legend( "Training", "BOpt", "Best", "location", "best",...
                                                 "FontSize", 12 );
-            title( Ax, "Bayesian Optimisation Solution Summary",...
-                       "FontSize", 16);
+            if matches( string( obj.Problem ), "Maximisation" )
+                Tstr = sprintf( "Bayesian Optimisation Solution Summary - Maximisation" );
+            else
+                Tstr = sprintf( "Bayesian Optimisation Solution Summary - Minimisation" );
+            end
+            title( Ax, Tstr, "FontSize", 16);
             xlabel( Ax, "Solution Index", "FontSize", 14);
             ylabel( Ax, "Cost Function", "FontSize", 14);
         end % plotBayesOpt
@@ -688,14 +697,15 @@ classdef ecomoInterface < handle
             % Export the identified parameters to the wotkspace. Store in
             % the Id property.
             %
-            % [ FMbest, ModelPara, BoundCond ] = obj.exportParameters();
+            % [ FMbest, ModelPara, BoundCond, Options ] = obj.exportParameters();
             %
             % Output Arguments:
             %
             % FMbest    - (FoulingModel) best simulation for the training
             % data
-            % ModelPara - (struct) fouling model parameter structure
-            % BoundCond - (struct) 
+            % ModelPara - (struct) Fouling model parameter structure
+            % BoundCond - (struct) Boundary conditions structure
+            % Options   - (struct) Simulation options
             %--------------------------------------------------------------
             H = obj.Lh.Source{ : };                                         % DoEhook object
             S = H.Lh.Source{ : };
@@ -814,6 +824,15 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             obj.B = obj.B.acqFcnMaxTemplate( "lb", Lo, "ub", Hi,...
                                              "nonlcon", NonLinCon );
+            %--------------------------------------------------------------
+            % Now run a few iterations of a gradient optimiser using the
+            % likelihood as a way of guranteeing improved performance
+            %--------------------------------------------------------------
+            Xnext = obj.minLogLikelihood();
+            %--------------------------------------------------------------
+            % Replace the value in the current design and resimulate
+            %--------------------------------------------------------------
+            obj.B = obj.B.setXnext( Xnext );
         end % genNewQuery
 
         function exportNewQuery( obj )
@@ -903,6 +922,66 @@ classdef ecomoInterface < handle
     end % Get/Set methods
 
     methods ( Access = protected )
+        function Xnext = minLogLikelihood( obj, NumIter )
+            %--------------------------------------------------------------
+            % A method to directly reduce the likelihood in an attempt to
+            % mitigate the concern regarding Bayesian Optimisation not
+            % guaranteed to yield an improvement every iteration.
+            %
+            % Xnext = obj.minLogLikelihood( NumIter )
+            %
+            % Input Arguments:
+            %
+            % NumIter --> (int8) Number of iterations to be performed.
+            %             NumIter must be in the interval [1, 10]. Default
+            %             is 5.
+            %--------------------------------------------------------------
+            arguments
+                obj      (1,1) ecomoInterface     { mustBeNonempty( obj ) }
+                NumIter  (1,1) int8 { mustBeGreaterThanOrEqual( NumIter, 1 ), ...
+                                      mustBeLessThanOrEqual( NumIter, 20 ) } = 15
+            end
+            %--------------------------------------------------------------
+            % Parse the optional arguments
+            %--------------------------------------------------------------
+            Names = [ "lb", "ub", "nonlcon", "Aineq", "binq", "Aeq",...
+                       "beq", "options" ];
+            [ Xlo, Xhi ] = obj.fetchLimits();
+            for Q = 1:numel( Names )
+                if matches( Names( Q ), "lb" )
+                   PROBLEM.( Names( Q ) ) = Xlo;
+                elseif matches( Names( Q ), "ub" )
+                   PROBLEM.( Names( Q ) ) = Xhi;
+                else
+                   PROBLEM.( Names( Q ) ) = [];
+               end
+            end
+            %--------------------------------------------------------------
+            % Set up the optimisation problem
+            %--------------------------------------------------------------
+            PROBLEM.options = optimoptions( "fmincon" );
+            PROBLEM.options.Display = "none";
+            PROBLEM.options.PlotFcn = "optimplotfval";
+            PROBLEM.options.MaxIterations = double( NumIter );
+            PROBLEM.solver = "fmincon"; 
+            PROBLEM.objective = @(X)obj.evalLikelihood( X );
+            PROBLEM.x0 = obj.B.Xnext;
+            Xnext = fmincon( PROBLEM );
+        end % minLogLikelihood
+
+        function L = evalLikelihood( obj, X )
+            %--------------------------------------------------------------
+            % Evaluate the likelihood function
+            %
+            % L = obj.evalLikelihood( X);
+            %
+            % Input Arguments:
+            %
+            % X --> (double) Parameter vector
+            %--------------------------------------------------------------
+            L = obj.B.ModelObj.predict( X );
+        end % evalLikelihood
+
         function obj = exportData( obj, Res, SurModel, AcqFcn )
             %--------------------------------------------------------------
             % Define the bayesOpt object and input the data.
@@ -919,7 +998,7 @@ classdef ecomoInterface < handle
                 obj.B = bayesOpt( SurModel, AcqFcn );
             end
             X = obj.makeXmatrix();
-            [ Lo, Hi ] = fetchLimits( obj );
+            [ Lo, Hi ] = obj.fetchLimits();
             obj.B = obj.B.conDataCoding( Lo, Hi );
             obj.B = obj.B.setTrainingData( X, Res(:) );
         end % exportData
@@ -964,12 +1043,39 @@ classdef ecomoInterface < handle
                     if iscell( S )
                         S = S{ : };
                     end
-                    if isempty(S.X) || matches( S.X, "x")
-                        Lo( Knots ) = repmat( 0.05 * obj.TubeLen / 1000, size( Knots ) );
-                        Hi( Knots ) = repmat( 0.95 * obj.TubeLen / 1000, size( Knots ) );
+                    TensorFlag = obj.Src.DesObj.Bspline{ Name( Q ), "Tensor" };
+                    if TensorFlag
+                        %--------------------------------------------------
+                        % Tensor product B-spline
+                        %--------------------------------------------------
+                        Finish = 0;
+                        for Kk = 1:numel( S.K )
+                            Start = Finish + 1;
+                            Finish = Start + S.K( Kk ) - 1;
+                            K = Start:Finish;
+                            if matches( "x", S.X( Kk ) )
+                                Vlo = 0.05 * obj.TubeLen / 1000;
+                                Vhi = 0.95 * obj.TubeLen / 1000;
+                            else
+                                Vlo = 1.05 * S.Xlo( Kk );
+                                Vhi = 0.95 * S.Xhi( Kk );
+                            end
+                            Lo( Knots( K ) ) = Vlo;
+                            Hi( Knots( K ) ) = Vhi;
+                        end
                     else
-                        Lo( Knots ) = repmat( S.Xlo, size( Knots ) );
-                        Hi( Knots ) = repmat( S.Xhi, size( Knots ) );
+                        %--------------------------------------------------
+                        % One-dimensional B-spline
+                        %--------------------------------------------------
+                        if matches( "x", S.X)
+                            Lo( Knots ) = repmat( 0.05 * obj.TubeLen ...
+                                          / 1000, size( Knots ) );
+                            Hi( Knots ) = repmat( 0.95 * obj.TubeLen ...
+                                          / 1000, size( Knots ) );
+                        else
+                            Lo( Knots ) = repmat( 1.05 * S.Xlo, size( Knots ) );
+                            Hi( Knots ) = repmat( 0.95 * S.Xhi, size( Knots ) );
+                        end
                     end
                 end
             end % /Q
@@ -1139,14 +1245,15 @@ classdef ecomoInterface < handle
             % necessary. Populate fields for identification with row R of 
             % the source parameter table.
             % 
-            % [ P, B ] = obj.parameterCheck( M, B, S, R );
+            % [ P, B ] = obj.parameterCheck( M, B, R, T, type );
             %
             % Input Arguments:
             %
-            % M  --> (struct)  ECOMO model parameter structure
-            % B  --> (struct)  ECOMO model boundary conditions structure
-            % S  --> (DoEhook) Event source object
-            % R  --> (double)  DoE run to load 
+            % M     --> (struct)  ECOMO model parameter structure
+            % B     --> (struct)  ECOMO model boundary conditions structure
+            % R     --> (double)  DoE run to load 
+            % T     --> (table)   Parameter table containing DoE values
+            % type  --> (string)  Either Parameter or Boundary
             %
             % Output Arguments:
             %
@@ -1169,13 +1276,23 @@ classdef ecomoInterface < handle
             Idx = ~contains( IdNames, "Simulated" );
             IdNames = IdNames( Idx );
             N = numel( IdNames );
-            for Q = 1:N
+            for Q = 1:N 
                 %----------------------------------------------------------
                 % Add the field to the structure
                 %----------------------------------------------------------
                 Val = T{ R, IdNames( Q ) };
                 if iscell( Val )
                     Val = cell2mat( Val );
+                end
+                if matches( IdNames( Q ), "fRegMP" )
+                    %------------------------------------------------------
+                    % Insert the parameters into the correct place in the
+                    % (3x2) array
+                    %------------------------------------------------------
+                    Freg = P.( IdNames{ Q } );
+                    Freg( 2, : ) = Val( 1:2 );
+                    Freg( 3, 1 ) = Val( 3 );
+                    Val = Freg;
                 end
                 %----------------------------------------------------------
                 % Overwrite all parameters
@@ -1226,7 +1343,8 @@ classdef ecomoInterface < handle
             if iscell( L )
                 Lim = L;
             else
-                Lim = num2cell( L );
+%                 Lim = num2cell( L );
+                Lim = mat2cell( L, ones( 1, size( L, 1 ) ) );
             end
         end % ensureIsCell
     end % protected and static methods
