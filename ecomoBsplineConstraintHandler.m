@@ -32,10 +32,10 @@ function [ C, Ceq ] = ecomoBsplineConstraintHandler( Theta, D )
         % Retain only splines with active constraints
         %------------------------------------------------------------------
         ConIdx = ~cellfun( @isempty, Con );
-        %------------------------------------------------------------------
-        % Decode the design
-        %------------------------------------------------------------------
-        Theta = D.decodeDesign( Theta );
+%         %------------------------------------------------------------------
+%         % Decode the design
+%         %------------------------------------------------------------------
+%         Theta = D.decodeDesign( Theta );
         for Q = 1:N
             if ConIdx( Q )
                 %----------------------------------------------------------
@@ -48,7 +48,19 @@ function [ C, Ceq ] = ecomoBsplineConstraintHandler( Theta, D )
                 %----------------------------------------------------------
                 % Set the x-points to evaluate the constraint at
                 %----------------------------------------------------------
-                X = linspace( B.a, B.b, 101 ).';
+                if isa( B, "tensorProductBspline" )
+                    %------------------------------------------------------
+                    % Two-dimensional tensor product B-spline
+                    %------------------------------------------------------
+                    X = arrayfun( @linspace, B.A, B.B, [101 101] ,...
+                                                   'UniformOutput', false);
+                    X = [ X{ 1 } ; X{ 2 } ].';
+                else
+                    %------------------------------------------------------
+                    % One-dimensional B-spline
+                    %------------------------------------------------------
+                    X = linspace( B.a, B.b, 101 ).';
+                end
                 %----------------------------------------------------------
                 % Evaluate the nonlinear constraint
                 %----------------------------------------------------------
@@ -62,8 +74,20 @@ function [ C, Ceq ] = ecomoBsplineConstraintHandler( Theta, D )
                     Cidx = Cidx{ : };
                 end
                 Coef = Theta( Cidx );
-                B.n = Knot;
-                B.alpha = Coef;
+                if isa( B, "tensorProductBspline" )
+                    %------------------------------------------------------
+                    % Two-dimensional tensor product B-spline
+                    %------------------------------------------------------
+                    B = B.setAlpha( Coef );
+                    Seq = B.convertKnotSequences( Knot );
+                    B = B.setKnotSequences( Seq );
+                else
+                    %------------------------------------------------------
+                    % One-dimensional B-spline
+                    %------------------------------------------------------
+                    B.n = Knot;
+                    B.alpha = Coef;
+                end
                 %----------------------------------------------------------
                 % Constrained if multiple dimensional structure
                 ApplyConstraint = ( max( size( Con{ Q } ) ) > 1 );

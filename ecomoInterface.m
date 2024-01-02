@@ -5,9 +5,12 @@ classdef ecomoInterface < handle
         PROCESS_NEW_QUERY                                                   % New point to query available.  
     end
 
+    properties ( SetAccess = protected, Transient )
+        Lh          (1,1)                                                   % Listener handle for RUN_EXPERIMENT event
+    end 
+
     properties ( SetAccess = protected )
         Src         (1,1)                                                   % Event source
-        Lh          (1,1)                                                   % Listener handle for RUN_EXPERIMENT event
         FM          (1,:) FoulingModel                                      % ECOMO fouling model object array
         IDdata      (1,1) string                                            % Name of identification data file
         B           (1,1) bayesOpt = bayesOpt( "gpr", "ucb" )               % bayesOpt object
@@ -26,8 +29,9 @@ classdef ecomoInterface < handle
         ConfigFile  (1,1) string                                            % ECOMO model configuration file
         UseParallel (1,1) logical = true
         ShowWaitbar (1,1) logical = true
-        Trim        (1,1) logical = true
-        TrimPct     (1,1) double { mustBeInRange( TrimPct, 0, 0.25) }        = 0.15
+        Trim        (1,1) logical = false
+        TrimPct     (1,1) double { mustBeInRange( TrimPct, 0, 0.25) }       = 0.15
+        ExpMult     (1,1) double { mustBeGreaterThanOrEqual( ExpMult, 1 ) } = 1
     end
 
     properties ( Constant = true )
@@ -542,7 +546,7 @@ classdef ecomoInterface < handle
             FSim.plot;
         end % plotFitDiagnostics
 
-        function plotResiduals( obj, SimNum )
+        function Ax = plotResiduals( obj, SimNum )
             %--------------------------------------------------------------
             % Residual plots for the selected simulation
             %
@@ -552,6 +556,10 @@ classdef ecomoInterface < handle
             %
             % SimNum --> (int64) Simulation number to plot. Default is the
             %                    best simulation
+            %
+            % Output Arguments:
+            %
+            % Ax     --> (axes) Axes handles to plots
             %--------------------------------------------------------------
             arguments
                 obj     (1,1) ecomoInterface
@@ -560,52 +568,8 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             % Retrieve the desired simulation
             %--------------------------------------------------------------
-            FSim = obj.FM( SimNum );                                              
-            figure;
-            for  Q = 4:-1:1
-                Ax( Q ) = subplot( 2, 2, Q);
-                switch Q
-                    case 1
-                        %--------------------------------------------------
-                        % Temperature residual versus time
-                        %--------------------------------------------------
-                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
-                        obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
-                        xlabel( "Time [s]" );
-                        ylabel( "Outlet Temperature Residual [^oC]" );
-                    case 2
-                        %--------------------------------------------------
-                        % Temperature residual versus predicted
-                        %--------------------------------------------------
-                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
-                        Yhat = FSim.T_out_L_degC;
-                        obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
-                        xlabel( "Predicted Outlet Temperature [^oC]");
-                        ylabel( "Outlet Temperature Residual [^oC]" );
-                    case 3
-                        %--------------------------------------------------
-                        % Pressure residuals versus time
-                        %--------------------------------------------------
-                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
-                        obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
-                        xlabel( "Time [s]" );
-                        ylabel( "Residual \Deltapressure [kPa]");
-                    otherwise
-                        %--------------------------------------------------
-                        % Pressure residuals versus predicted
-                        %--------------------------------------------------
-                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
-                        Yhat = FSim.deltaPre_L_kPa;
-                        obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
-                        xlabel( "Predicted \Deltapressure [kPa]");
-                        ylabel( "Residual \Deltapressure [kPa]");
-                end
-                Ax( Q ).GridAlphaMode = "manual";
-                Ax( Q ).GridAlpha = 0.75;
-                Ax( Q ).GridLineStyle = "-.";
-                Ax( Q ).XGrid = "on";
-                Ax( Q ).YGrid = "on";
-            end
+            FSim = obj.FM( SimNum );           
+            Ax = makeResidualPlots( obj, FSim );
         end % plotResiduals
         
         function plotBayesOpt( obj )
@@ -701,12 +665,12 @@ classdef ecomoInterface < handle
             %
             % Output Arguments:
             %
-            % FMbest    - (FoulingModel) best simulation for the training
-            % data
+            % FM        - (FoulingModel) best simulation for the training
             % ModelPara - (struct) Fouling model parameter structure
             % BoundCond - (struct) Boundary conditions structure
             % Options   - (struct) Simulation options
             %--------------------------------------------------------------
+            FM = obj.BestFM;
             H = obj.Lh.Source{ : };                                         % DoEhook object
             S = H.Lh.Source{ : };
             T = S.Factors.Type;
@@ -734,16 +698,6 @@ classdef ecomoInterface < handle
                     BoundCond.( Names{ Q } ) = X;
                 end
             end
-            %--------------------------------------------------------------
-            % Save the results
-            %--------------------------------------------------------------
-            [ Path, Fname, Ext ] = fileparts( obj.IDdata );
-            Fname = strjoin( [ Fname, "Analysis"], "_" );
-            Fname = strjoin( [ Fname, Ext ], "" );
-            Fname = fullfile( Path, Fname );
-            BoundCond.IN_TimeSeries = obj.Data;
-            FM = obj.BestFM;
-            save( Fname, "FM", "BoundCond", "ModelPara", "Options" );
         end % exportParameters
 
         function plotTimeSeries( obj, SimNum )
@@ -895,6 +849,69 @@ classdef ecomoInterface < handle
             end
         end % processResiduals        
     end % Ordinary methods
+
+    methods ( Hidden = true )
+        function Ax = makeResidualPlots( obj, FSim )
+            %--------------------------------------------------------------
+            % Make residual plots for the simulation object provided.
+            %
+            % Ax = obj.makeResidualPlots( FSim );
+            %
+            % Input Arguments:
+            %
+            % FSim --> (FoulingModel) ECOMO simulation object
+            %
+            % Output Arguments:
+            %
+            % Ax     --> (axes) Axes handles to plots
+            %--------------------------------------------------------------
+            figure;
+            for  Q = 4:-1:1
+                Ax( Q ) = subplot( 2, 2, Q);
+                switch Q
+                    case 1
+                        %--------------------------------------------------
+                        % Temperature residual versus time
+                        %--------------------------------------------------
+                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
+                        obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
+                        xlabel( "Time [s]" );
+                        ylabel( "Outlet Temperature Residual [^oC]" );
+                    case 2
+                        %--------------------------------------------------
+                        % Temperature residual versus predicted
+                        %--------------------------------------------------
+                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
+                        Yhat = FSim.T_out_L_degC;
+                        obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
+                        xlabel( "Predicted Outlet Temperature [^oC]");
+                        ylabel( "Outlet Temperature Residual [^oC]" );
+                    case 3
+                        %--------------------------------------------------
+                        % Pressure residuals versus time
+                        %--------------------------------------------------
+                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
+                        obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
+                        xlabel( "Time [s]" );
+                        ylabel( "Residual \Deltapressure [kPa]");
+                    otherwise
+                        %--------------------------------------------------
+                        % Pressure residuals versus predicted
+                        %--------------------------------------------------
+                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
+                        Yhat = FSim.deltaPre_L_kPa;
+                        obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
+                        xlabel( "Predicted \Deltapressure [kPa]");
+                        ylabel( "Residual \Deltapressure [kPa]");
+                end
+                Ax( Q ).GridAlphaMode = "manual";
+                Ax( Q ).GridAlpha = 0.75;
+                Ax( Q ).GridLineStyle = "-.";
+                Ax( Q ).XGrid = "on";
+                Ax( Q ).YGrid = "on";
+            end
+        end % makeResidualPlots
+    end % Hidden methods
 
     methods
         function Idx = get.BestIdx( obj )
