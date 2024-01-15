@@ -1,17 +1,10 @@
 classdef ecomoInterface < handle
     % A class to generate the Model parameter structure demanded by the
     % ECOMO code...
-    events
-        PROCESS_NEW_QUERY                                                   % New point to query available.  
-    end
-
-    properties ( SetAccess = protected, Transient )
-        Lh          (1,1)                                                   % Listener handle for RUN_EXPERIMENT event
-    end 
 
     properties ( SetAccess = protected )
-        Src         (1,1)                                                   % Event source
-        FM          (1,:) FoulingModel                                      % ECOMO fouling model object array
+        Src         (1,1) DoEhook                                           % DoE Hook
+        FM          (:,1) FoulingModel                                      % ECOMO fouling model object array
         IDdata      (1,1) string                                            % Name of identification data file
         B           (1,1) bayesOpt = bayesOpt( "gpr", "ucb" )               % bayesOpt object
         Data        (1,1) struct                                            % Identification training data
@@ -30,12 +23,18 @@ classdef ecomoInterface < handle
         UseParallel (1,1) logical = true
         ShowWaitbar (1,1) logical = true
         Trim        (1,1) logical = false
-        TrimPct     (1,1) double { mustBeInRange( TrimPct, 0, 0.25) }       = 0.15
+        TrimPct     (1,1) double { mustBeInRange( TrimPct, 0, 0.25) }       = 0.10
         ExpMult     (1,1) double { mustBeGreaterThanOrEqual( ExpMult, 1 ) } = 1
+        SVdTgout    (1,1)   double = 0.0001                                 % Convergence criterion for stopping simulation early
     end
 
+    properties ( Access = public )
+        BoundCond   (1,1) struct
+        ModelPara   (1,1) struct
+    end % private properties
+
     properties ( Constant = true )
-        X_H2O   (1,1)   double = 0.04508                                    % Molar fraction of water vapour present in exhaust gas
+        X_H2O    (1,1)   double = 0.04508                                   % Molar fraction of water vapour present in exhaust gas
     end % Constant properties
 
     properties ( SetAccess = protected, Dependent = true )
@@ -43,6 +42,8 @@ classdef ecomoInterface < handle
         BestFM         FoulingModel                                         % Best simulation object
         Problem        string                                               % Problem type
         InitialSize    double                                               % Size of initial surrogate model training DoE
+        NumTsteps      int64                                                % Number of time time steps
+        NumPoints      int64                                                % Number of simulation runs
     end % dependent properties
 
     properties ( Access = private, Dependent = true )
@@ -175,12 +176,12 @@ classdef ecomoInterface < handle
             obj.NumTube = Num;
         end % setNumberOfTubes
 
-        function [ BoundCond, ModelPara, Options ] = initialisation( obj )
+        function obj = initialisation( obj )
             %--------------------------------------------------------------
-            % Create the three structures required to configure and run an
+            % Create the two structures required to configure and run an
             % ECOMO simulation:
             %
-            % [ BoundCond, ModelPara, Options ] = obj.initialisation()
+            % obj = obj.initialisation()
             %
             % Notes: the user will be prompted for a MATLAB script defing
             % the setup.
@@ -195,20 +196,18 @@ classdef ecomoInterface < handle
                 obj = obj.loadPNdistDataFile();                              
             end
             %--------------------------------------------------------------
-            % Load the configuration function if required
+            % Load the configuration function
             %--------------------------------------------------------------
-            if ( exist( obj.ConfigFile, 'File' ) ~= 2 )
-                [ Fname, Path ] = uigetfile( "*.m",...
+            [ Fname, Path ] = uigetfile( "*.m",...
                 "Select ECOMO Simulation Initialisation function",...
                 "ECOMO_sim_initialization.m", "MultiSelect","off");
-                obj.ConfigFile = fullfile( Path, Fname );
-            end
+            obj.ConfigFile = fullfile( Path, Fname );
             [ ~, Fname ] = fileparts( obj.ConfigFile );
             Cmd = strjoin( [Fname, "( obj )"], "" );
             %--------------------------------------------------------------
             % Execute the configuration function
             %--------------------------------------------------------------
-            [ BoundCond, ModelPara, Options ] = eval( Cmd );
+            [ obj.BoundCond, obj.ModelPara ] = eval( Cmd );
         end % initialisation
 
         function obj = defineBayesOpt( obj, Model, AcqFcn )
@@ -301,9 +300,9 @@ classdef ecomoInterface < handle
             arguments
                 obj     (1,1) ecomoInterface
                 Fname   (1,:) string         = string.empty
-                Varname (1,:) string         = "EGRVars"
+                Varname (1,:) string         = string.empty
             end
-            if ( nargin < 2 ) || ( exist( Fname, "file" ) ~= 2 )
+            if ( nargin < 2 ) || isempty( Fname ) || ( exist( Fname, "file" ) ~= 2 )
                 [ Fname, Path ] = uigetfile( ".mat",...
                         "Select the identification data file",...
                         "MultiSelect", "off");
@@ -315,7 +314,7 @@ classdef ecomoInterface < handle
             load( obj.IDdata,  Varname );
             obj.Data = eval( Varname );
         end % loadIdentificationData
-        
+         
         function obj = setProblemType( obj, M )
             %--------------------------------------------------------------
             % Set the optimisation problem type (maximisation or 
@@ -375,11 +374,11 @@ classdef ecomoInterface < handle
             Hi( ~PidxHi ) = ( 1 - Dx ) * Hi( ~PidxHi );
         end % setDataBounds
         
-        function obj = addRunExperimentListener( obj, Src )
+        function obj = addDoEhook( obj, Src )
             %--------------------------------------------------------------
-            % Add the listener for the RUN_EXPERIMENT event
+            % Add the DoEhook object
             % 
-            % obj = addRunExperimentListener( Src );
+            % obj = addDoEhook( Src );
             %
             % Input Arguments:
             %
@@ -390,50 +389,45 @@ classdef ecomoInterface < handle
                 Src (1,1) DoEhook
             end
             obj.Src = Src;
-            obj.Lh = addlistener( Src, "RUN_EXPERIMENT",...
-                @( SrcObj, Evnt )obj.eventCbRun( SrcObj, Evnt ) );           
-        end % addRunExperimentListener
-
+        end % addDoEhook
 
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         % NOTE: this method was modified by MathWorks to show an example of
         % how parallel computing can be leveraged to run simulations in
         % parallel in a parfor loop instead of a for loop.
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%        
-        function obj = eventCbRun( obj, SrcObj, Evnt )
+        function obj = doSimulations( obj, SrcObj )
             %--------------------------------------------------------------
-            % Callback for the RUN_EXPERIMENT event
+            % Perform all outstanding simulations
             %
             % 1. Run the ECOMO parameter model script file and generate an
-            %    initial ModelPara structure. 
+            %    initial ModelPara structure if required. 
             % 2. Determine if all variables defined in the Parameter table
             %    in the DOE object are defined in the ModelPara structure.
             %    Add any missing fields.
             % 3. Loop through the DoE and run each simulation as requested.
             %
-            % obj = obj.eventCbRun( SrcObj, Evnt );
+            % obj = obj.doSimulations( SrcObj );
             % 
             % Input Arguments:
             % 
-            % SrcObj --> (DoEhook) object generating the RUN_EXPERIMENT
-            %            event.
-            % Evnt   --> (EventData)
+            % SrcObj --> (DoEhook) object. Used to translate design into
+            %            corresponding simulation variables
             %--------------------------------------------------------------
             arguments
                 obj     (1,1) ecomoInterface
-                SrcObj  (1,1) DoEhook
-                Evnt    (1,1) event.EventData
+                SrcObj  (1,1) DoEhook                                       = obj.Src
             end
             %--------------------------------------------------------------
-            % Event check
+            % Composite the DoEhook object
             %--------------------------------------------------------------
-            Ename = string( Evnt.EventName );
-            Ok = contains( "RUN_EXPERIMENT", Ename );
-            assert( Ok, 'Not processing the %s event supplied', Ename );
+            obj = obj.addDoEhook( SrcObj );
             %--------------------------------------------------------------
             % 1. Run the ECOMO model configuration function
             %--------------------------------------------------------------
-            [ BoundCond, ModelPara, Options ] = obj.initialisation( );
+            if ( exist( obj.ConfigFile, "file" ) ~= 2 )
+                obj = obj.initialisation( );
+            end
             %--------------------------------------------------------------
             % 2. Determine if all variables defined in the Parameter table
             %    in the DOE object are defined in the ModelPara structure.
@@ -454,6 +448,11 @@ classdef ecomoInterface < handle
             parTable = SrcObj.ParTable;
             type = SrcObj.Type;
 
+            % Modification by M. Cary 11/01/2024
+            % Define default configuration structures
+            ModPara = obj.ModelPara;                                        % Parameters
+            BndCond = obj.BoundCond;                                        % Boundary conditions
+
             % Simulate new conditions, serially or in parallel.
             if obj.UseParallel 
 
@@ -470,14 +469,14 @@ classdef ecomoInterface < handle
 
                     % Call the updated parameterCheck method.
                     [ModelParaTmp, BoundCondTmp] = ecomoInterface.parameterCheck_Updated( ...
-                        ModelPara, BoundCond, Idx, parTable, type);
+                        ModPara, BndCond, Idx, parTable, type);
 
                     % Run the Fouling model simulation and assign the
                     % object in the correct index in the Fouling model
                     % array.
-                    FMarray{Q}  = ecomoInterface.runSimulation(ModelParaTmp,...
-                        BoundCondTmp, Options);
-                    send(D, []); % update waitbar
+                    FMarray{ Q }  = ecomoInterface.runSimulation(ModelParaTmp,...
+                        BoundCondTmp );
+                    send(D, [] ); % update waitbar
                 end
 
                 % No need to do this within the parfor loop.
@@ -495,9 +494,9 @@ classdef ecomoInterface < handle
                     waitbar(Idx / MaxN, F, msg);
 
                     [ModelParaTmp, BoundCondTmp] = ecomoInterface.parameterCheck( ...
-                        ModelPara, BoundCond, SrcObj, Idx);
+                        ModPara, BndCond, SrcObj, Idx);
                     FMarray{Q}  = ecomoInterface.runSimulation(ModelParaTmp,...
-                        BoundCondTmp, Options);
+                        BoundCondTmp );
                     SrcObj.setSimulated(Idx, true);
                 end
 
@@ -509,7 +508,7 @@ classdef ecomoInterface < handle
             if isempty( obj.FM )
                 obj.FM = FMarray;
             else
-                obj.FM = [ obj.FM, FMarray ];
+                obj.FM = [ obj.FM; FMarray ];
             end
             
             delete(F); % close waitbar.
@@ -519,7 +518,27 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             Res = obj.processResiduals();
             obj = obj.exportData( Res );
-        end % eventCbRun
+        end % doSimulations
+
+        function resetFMArray( obj )
+            %--------------------------------------------------------------
+            % Reset the Fouling Model array in the Ecomointerface object
+            %
+            % obj.resetFMarray();
+            %--------------------------------------------------------------
+            obj.FM = FoulingModel.empty;
+        end % resetFMArray
+
+        function resetBayes( obj )
+            %--------------------------------------------------------------
+            % Reset the Bayesian optimisation object in the Ecomointerface 
+            % object
+            %
+            % obj.resetBayes();
+            %--------------------------------------------------------------
+            AcqFun = obj.B.AcqFcn;
+            obj.B = bayesOpt( "gpr", AcqFun );
+        end % resetBayes
 
         function plotFitDiagnostics( obj, SimNum )
             %--------------------------------------------------------------
@@ -632,7 +651,7 @@ classdef ecomoInterface < handle
                 "Select the identification parameter file",...
                 "MultiSelect", "off");
             Fname = fullfile( Path, Fname );
-            load( Fname, "BoundCond", "ModelPara", "Options" );
+            load( Fname, "BoundCond", "ModelPara" );
             if Cln
                 %----------------------------------------------------------
                 % Run clean tube simulation if required
@@ -652,37 +671,28 @@ classdef ecomoInterface < handle
                 BoundCond.IN_TimeSeries = ...
                             obj.repTimeSeries( BoundCond.IN_TimeSeries );
             end % /Q
-            F = FoulingModel( BoundCond, ModelPara, Options );
+            F = FoulingModel( BoundCond, ModelPara );
             F.run;
         end
 
-        function [ FM, ModelPara, BoundCond, Options ] = exportParameters( obj ) 
+        function FM = exportParameters( obj ) 
             %--------------------------------------------------------------
             % Export the identified parameters to the wotkspace. Store in
             % the Id property.
             %
-            % [ FMbest, ModelPara, BoundCond, Options ] = obj.exportParameters();
+            % [ FMbest, ModelPara, BoundCond ] = obj.exportParameters();
             %
             % Output Arguments:
             %
             % FM        - (FoulingModel) best simulation for the training
-            % ModelPara - (struct) Fouling model parameter structure
-            % BoundCond - (struct) Boundary conditions structure
-            % Options   - (struct) Simulation options
             %--------------------------------------------------------------
             FM = obj.BestFM;
-            H = obj.Lh.Source{ : };                                         % DoEhook object
-            S = H.Lh.Source{ : };
+            H = obj.Src;                                                    % DoEhook object
+            S = H.DesObj;
             T = S.Factors.Type;
             NumFactors = S.NumFactors;
             Names = H.ParTable.Properties.VariableNames( 1:( end - 1) );
             P = H.ParTable( obj.B.Bidx, 1:( end - 1 ) );
-            %--------------------------------------------------------------
-            % Run the configuration file to define the parameters
-            %--------------------------------------------------------------
-            [ ~, Cmd ] = fileparts( obj.ConfigFile );
-            Cmd = strjoin( [ Cmd,"( obj )"], "" );
-            [ BoundCond, ModelPara, Options ] = eval( Cmd );
             for Q = 1:NumFactors
                 %----------------------------------------------------------
                 % Overwrite the parameters and boundary conditions as
@@ -693,9 +703,9 @@ classdef ecomoInterface < handle
                     X = X{ : };
                 end
                 if contains( "Parameter", T( Q ) )
-                    ModelPara.( Names{ Q } ) = X;
+                    obj.ModelPara.( Names{ Q } ) = X;
                 else
-                    BoundCond.( Names{ Q } ) = X;
+                    obj.BoundCond.( Names{ Q } ) = X;
                 end
             end
         end % exportParameters
@@ -795,8 +805,35 @@ classdef ecomoInterface < handle
             %
             % obj.exportNewQuery();
             %--------------------------------------------------------------
-            notify( obj, 'PROCESS_NEW_QUERY' );
+            obj.Src.augmentParTable( obj.B.Xnext );
+            obj.doSimulations();
         end % exportNewQuery
+
+        function obj = overWrite( obj, Sim )
+            %--------------------------------------------------------------
+            % Overwrite parameter values in the default ModelPar and
+            % BoundCond structures. This permits the results from a
+            % previous identification step to be utilised in a subsequent
+            % one.
+            %
+            % obj = obj.overWrite( Sim );
+            %
+            % Input Arguments:
+            %
+            % Sim  --> (int64) Simulation number to copy parameters from.
+            %          Default is the best simulation.
+            %--------------------------------------------------------------
+            arguments
+                obj  (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                Sim  (1,1) int64                                            = obj.BestIdx
+            end
+            %--------------------------------------------------------------
+            % Retrieve the required simulation object
+            %--------------------------------------------------------------
+            FMsim = obj.FM( Sim );
+            obj.BoundCond = FMsim.BoundCond;
+            obj.ModelPara = FMsim.ModelPara;
+        end % overWrite
 
         function L = processResiduals( obj )
             %--------------------------------------------------------------
@@ -808,8 +845,15 @@ classdef ecomoInterface < handle
             %
             % L --> (double) (Nx1) vector of loglikelihood values.
             %--------------------------------------------------------------
-            Tout = [ obj.FM( : ).T_out_L_degC ];                            % Tout predictions from the simulation
-            DeltaP = [ obj.FM( : ).deltaPre_L_kPa ];                        % Delta pressure predictions from the simulation
+            N = obj.NumPoints;
+            %--------------------------------------------------------------
+            % Calculate the pressure and temperature residuals
+            %--------------------------------------------------------------
+            [DeltaP, Tout ] = deal( zeros( obj.NumTsteps, N ) );
+            for Q = 1:N
+                Tout( :, Q ) = obj.FM( Q ).T_out_L_degC;                    % Tout predictions from the simulation
+                DeltaP( :, Q ) = obj.FM( Q ).deltaPre_L_kPa;                % Delta pressure predictions from the simulation
+            end
             Tres = ( obj.Data.T_g_out - Tout );                             % Temperature residual matrix
             Pres = ( obj.Data.deltaP - DeltaP );                            % pressure residual matrix
             %--------------------------------------------------------------
@@ -873,7 +917,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Temperature residual versus time
                         %--------------------------------------------------
-                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
+                        Res = obj.Data.T_g_out - FSim.T_out_L_degC.';
                         obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
                         xlabel( "Time [s]" );
                         ylabel( "Outlet Temperature Residual [^oC]" );
@@ -881,7 +925,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Temperature residual versus predicted
                         %--------------------------------------------------
-                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
+                        Res = obj.Data.T_g_out - FSim.T_out_L_degC.';
                         Yhat = FSim.T_out_L_degC;
                         obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
                         xlabel( "Predicted Outlet Temperature [^oC]");
@@ -890,7 +934,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Pressure residuals versus time
                         %--------------------------------------------------
-                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
+                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa.';
                         obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
                         xlabel( "Time [s]" );
                         ylabel( "Residual \Deltapressure [kPa]");
@@ -898,7 +942,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Pressure residuals versus predicted
                         %--------------------------------------------------
-                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
+                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa.';
                         Yhat = FSim.deltaPre_L_kPa;
                         obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
                         xlabel( "Predicted \Deltapressure [kPa]");
@@ -932,10 +976,18 @@ classdef ecomoInterface < handle
 
         function S = get.InitialSize( obj )
             % Return the size of the training data pool
-            S = obj.Src.Lh.Source;
-            S = S{ : };
-            S = S.InitialSize;
+            S = obj.Src.DesObj.InitialSize;
         end % get.InitialSize
+
+        function N = get.NumTsteps( obj )
+            % Return the number of time steps
+            N = numel( obj.Data.pedal );
+        end % get.NumTsteps
+
+        function N = get.NumPoints( obj )
+            % Return number ofpoints
+            N = obj.Src.NumPoints;
+        end % get.NumPoints
     end % Get/Set methods
 
     methods ( Access = protected )
@@ -1166,21 +1218,18 @@ classdef ecomoInterface < handle
             end % /Q
         end
 
-        function FM = runSimulation( ModelPara, BoundCond, Options )
+        function FM = runSimulation( ModelPara, BoundCond )
             %--------------------------------------------------------------
             % Run an ECOMO simulation
             %
-            % FM = ecomoInterface.runSimulation( ModelPara, BoundCond,... 
-            %                                    Options );
+            % FM = ecomoInterface.runSimulation( ModelPara, BoundCond );
             %
             % Input Arguments:
             %
             % ModelPara --> (struct) Simulation model 
-
             % BoundCond --> (struct) Initial conditions
-            % Options   --> (struct) Configuration options
             %--------------------------------------------------------------
-            FM = FoulingModel(BoundCond,ModelPara,Options);                 % Define the simulation object
+            FM = FoulingModel( BoundCond, ModelPara );                      % Define the simulation object
             FM.run();                                                       % Run the simulation
         end % runSimulation
 
