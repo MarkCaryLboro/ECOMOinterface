@@ -32,14 +32,10 @@ function [ C, Ceq ] = ecomoBsplineConstraintHandler( Theta, D )
         % Retain only splines with active constraints
         %------------------------------------------------------------------
         ConIdx = ~cellfun( @isempty, Con );
-%         %------------------------------------------------------------------
-%         % Decode the design
-%         %------------------------------------------------------------------
-%         Theta = D.decodeDesign( Theta );
         for Q = 1:N
             if ConIdx( Q )
                 %----------------------------------------------------------
-                % Retrieve the B-spline object
+                % Retrieve the corresponding B-spline object
                 %----------------------------------------------------------
                 B = D.Bspline{ Names( Q ), "Object" };
                 if iscell( B )
@@ -90,6 +86,7 @@ function [ C, Ceq ] = ecomoBsplineConstraintHandler( Theta, D )
                 end
                 %----------------------------------------------------------
                 % Constrained if multiple dimensional structure
+                %----------------------------------------------------------
                 ApplyConstraint = ( max( size( Con{ Q } ) ) > 1 );
                 if ~ApplyConstraint
                     ApplyConstraint = ~( isempty(Con{ Q }.type) &...

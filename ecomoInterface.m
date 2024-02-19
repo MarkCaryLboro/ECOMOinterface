@@ -18,12 +18,13 @@ classdef ecomoInterface < handle
         Clean       (1,1) logical      = true                               % Set to logical to indicate clean cooler
     end
 
+    properties ( Constant = true )
+        UseParallel (1,1) logical = true
+    end % Constants
+
     properties 
         ConfigFile  (1,1) string                                            % ECOMO model configuration file
-        UseParallel (1,1) logical = true
         ShowWaitbar (1,1) logical = true
-        Trim        (1,1) logical = false
-        TrimPct     (1,1) double { mustBeInRange( TrimPct, 0, 0.25) }       = 0.10
         ExpMult     (1,1) double { mustBeGreaterThanOrEqual( ExpMult, 1 ) } = 1
         SVdTgout    (1,1)   double = 0.0001                                 % Convergence criterion for stopping simulation early
     end
@@ -345,34 +346,6 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             obj.B = obj.B.setXbestAsXnext();
         end % setXbestAsXnext
-
-        function [ Lo, Hi ] = setDataBounds( obj, Dx )
-            %--------------------------------------------------------------
-            % Return the data bounds for the parameters
-            %
-            % [ Lo, Hi ] = obj.setDataBounds( Dx );
-            %
-            % Input Arguments:
-            %
-            % Dx --> (double) Percentage delta to decrease (increase) the
-            %        data limits beyond the mimimum (maximum) DoE levels.
-            %        Note, 0.05 <= Dx <= 0.95;
-            %
-            % For example, if min( X ) = [ 1, -1 ] and if Dx = 0.1, then 
-            % Lo = [ 0.9 -1.1 ]. Similarly, if max( X ) = [ 1, -1 ] and if 
-            % Dx = 0.1, then Hi = [ 1.1, -0.9 ].
-            %--------------------------------------------------------------
-            Lo = obj.B.Xlo;
-            Hi = obj.B.Xhi;
-            [ PidxHi, PidxLo ] = obj.getPositive( Lo, Hi );
-            %--------------------------------------------------------------
-            % Now adjust the bounds
-            %--------------------------------------------------------------
-            Lo( PidxLo ) = ( 1 - Dx ) * Lo( PidxLo );
-            Lo( ~PidxLo ) = ( 1 + Dx ) * Lo( ~PidxLo );
-            Hi( PidxHi ) = ( 1 + Dx ) * Hi( PidxHi );
-            Hi( ~PidxHi ) = ( 1 - Dx ) * Hi( ~PidxHi );
-        end % setDataBounds
         
         function obj = addDoEhook( obj, Src )
             %--------------------------------------------------------------
@@ -460,8 +433,9 @@ classdef ecomoInterface < handle
                 D = parallel.pool.DataQueue;
                 afterEach(D, @parforWaitbar);
                 parforWaitbar(F, MaxN) % Initialise waitbar.
-
+                %----------------------------------------------------------
                 % Run simulations in parallel.
+                %----------------------------------------------------------
                 parfor Q = 1:Nx
 %                 for Q = 1:Nx    % for debugging
 
@@ -478,7 +452,6 @@ classdef ecomoInterface < handle
                         BoundCondTmp );
                     send(D, [] ); % update waitbar
                 end
-
                 % No need to do this within the parfor loop.
                 for Q = 1:Nx
                     Idx = N( Q );
@@ -777,7 +750,7 @@ classdef ecomoInterface < handle
             %
             % obj = obj.genNewQuery();
             %--------------------------------------------------------------
-            [ Lo, Hi ] = obj.setDataBounds( 0 );
+            [ Lo, Hi ] = obj.fetchLimits;
             SobSeqObj = obj.Src.DesObj;
             %--------------------------------------------------------------
             % Define the nonlinear constraints function
@@ -856,17 +829,7 @@ classdef ecomoInterface < handle
             end
             Tres = ( obj.Data.T_g_out - Tout );                             % Temperature residual matrix
             Pres = ( obj.Data.deltaP - DeltaP );                            % pressure residual matrix
-            %--------------------------------------------------------------
-            % Trim the residual data if desired. Remove the first
-            % x-percentage of the data.
-            %--------------------------------------------------------------
-            if obj.Trim
-                N =  size( Tres, 1 );
-                Ptr = floor( obj.TrimPct * N );
-                Ptr = Ptr:N;
-                Tres = Tres( Ptr, : );
-                Pres = Pres( Ptr, : );
-            end
+
             [ N, C ] = size( Tres );
             %--------------------------------------------------------------
             % Calculate normal negative loglikelihood
@@ -1123,11 +1086,15 @@ classdef ecomoInterface < handle
                             Finish = Start + S.K( Kk ) - 1;
                             K = Start:Finish;
                             if matches( "x", S.X( Kk ) )
-                                Vlo = 0.05 * obj.TubeLen / 1000;
-                                Vhi = 0.95 * obj.TubeLen / 1000;
+                                %------------------------------------------
+                                % Knot limits for tube length are hard
+                                % coded for now
+                                %------------------------------------------
+                                Vlo = 0.10 * obj.TubeLen / 1000;
+                                Vhi = 0.90 * obj.TubeLen / 1000;
                             else
-                                Vlo = 1.05 * S.Xlo( Kk );
-                                Vhi = 0.95 * S.Xhi( Kk );
+                                Vlo = S.Klo( Kk );
+                                Vhi = S.Khi( Kk );
                             end
                             Lo( Knots( K ) ) = Vlo;
                             Hi( Knots( K ) ) = Vhi;
@@ -1137,13 +1104,16 @@ classdef ecomoInterface < handle
                         % One-dimensional B-spline
                         %--------------------------------------------------
                         if matches( "x", S.X)
-                            Lo( Knots ) = repmat( 0.05 * obj.TubeLen ...
+                            %----------------------------------------------
+                            % These are hard coded for now
+                            %----------------------------------------------
+                            Lo( Knots ) = repmat( 0.10 * obj.TubeLen ...
                                           / 1000, size( Knots ) );
-                            Hi( Knots ) = repmat( 0.95 * obj.TubeLen ...
+                            Hi( Knots ) = repmat( 0.90 * obj.TubeLen ...
                                           / 1000, size( Knots ) );
                         else
-                            Lo( Knots ) = repmat( 1.05 * S.Xlo, size( Knots ) );
-                            Hi( Knots ) = repmat( 0.95 * S.Xhi, size( Knots ) );
+                            Lo( Knots ) = repmat( S.Klo, size( Knots ) );
+                            Hi( Knots ) = repmat( S.Khi, size( Knots ) );
                         end
                     end
                 end
@@ -1376,25 +1346,6 @@ classdef ecomoInterface < handle
                 end
             end % Q
         end % parameterCheck
-        
-        function [ PidxLo, PidxHi ] = getPositive( Lo, Hi )
-            %--------------------------------------------------------------
-            % Return logical pointers to establish sign of low and high
-            % parameter limits
-            %
-            % Input Arguments:
-            %
-            % Lo    --> (double) low parameter limit
-            % Hi    --> (double) high parameter limit
-            %
-            % Output Arguments:
-            %
-            % PidxLo --> (logical) is true if element of Lo is >= 0
-            % PidxHi --> (logical) is true if element of Hi is >= 0
-            %--------------------------------------------------------------
-            PidxLo = ( Lo >= 0 );
-            PidxHi = ( Hi >= 0);
-        end % getPositive
 
         function Lim = ensureIsCell( L )
             %--------------------------------------------------------------
