@@ -827,7 +827,7 @@ classdef ecomoInterface < handle
                 Tout( :, Q ) = obj.FM( Q ).T_out_L_degC;                    % Tout predictions from the simulation
                 DeltaP( :, Q ) = obj.FM( Q ).deltaPre_L_kPa;                % Delta pressure predictions from the simulation
             end
-            Tres = ( obj.Data.T_g_out - Tout );                             % Temperature residual matrix
+            Tres = ( obj.Data.T_g_out_ECM - Tout );                         % Temperature residual matrix
             Pres = ( obj.Data.deltaP - DeltaP );                            % pressure residual matrix
 
             [ N, C ] = size( Tres );
@@ -842,15 +842,15 @@ classdef ecomoInterface < handle
                         % Identify pressure and temperature parameters
                         % together
                         %--------------------------------------------------
-                        L( Q ) = 0.5 * N * ( log( Tres( :,Q ).' * Tres( :,Q ) ) +...
-                            log( Pres( :,Q ).' * Pres( :,Q ) ) );
+                        L( Q ) = 0.5 * N * ( log( Tres( :,Q ).' * Tres( :,Q ) / N ) +...
+                            log( Pres( :,Q ).' * Pres( :,Q ) / N ) );
                     case "Temperature"
                         %--------------------------------------------------
                         % Identify temerpature parameters only
                         %--------------------------------------------------
-                        L( Q ) = 0.5 * N * ( log( Tres( :,Q ).' * Tres( :,Q ) ));
+                        L( Q ) = 0.5 * N * ( log( Tres( :,Q ).' * Tres( :,Q ) / N ));
                     case "Pressure"
-                        L( Q ) = 0.5 * N * ( log( Pres( :,Q ).' * Pres( :,Q ) ));
+                        L( Q ) = 0.5 * N * ( log( Pres( :,Q ).' * Pres( :,Q ) / N ));
                 end
                 L( Q ) = N * log( 2 * pi ) + N + L( Q );
             end
