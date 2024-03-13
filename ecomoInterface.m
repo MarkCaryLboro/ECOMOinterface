@@ -16,6 +16,8 @@ classdef ecomoInterface < handle
         CostFcn     (1,1) costFcnType = "Combined"                          % Configure cost function
         NumCells    (1,1) double       = 10                                 % Number of computational cells
         Clean       (1,1) logical      = true                               % Set to logical to indicate clean cooler
+        N_steps     (1,1) int64        = 200                                % Number of time steps for custom simulation
+        Dt          (1,1) double       = 2.0                                % Default time step for custom simulation
     end
 
     properties ( Constant = true )
@@ -51,6 +53,76 @@ classdef ecomoInterface < handle
     end
 
     methods
+        function obj = setFMarray( obj, FM )
+            %--------------------------------------------------------------
+            %
+            % obj = obj.setFMarray( FM );
+            %
+            % Input Arguments:
+            %
+            % FM --> (FoulingModel) Array of FoulingModel objects
+            %--------------------------------------------------------------
+            arguments 
+                obj(1,1) ecomoInterface { mustBeNonempty( obj ) }
+                FM (:,1) FoulingModel { mustBeNonempty( FM ) }
+            end
+            obj.FM = FM; 
+        end % setFMarray
+
+        function obj = setDt( obj, DeltaTime )
+            %--------------------------------------------------------------
+            % Set time steps for custom simulation
+            %
+            % obj = obj.setDt( DeltaTime );
+            %
+            % Input Arguments:
+            %
+            % DeltaTime --> (double) Number of time steps for custom 
+            %               simulation
+            %--------------------------------------------------------------
+            arguments 
+                obj       (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                DeltaTime (1,1) int64  { mustBePositive( DeltaTime ) }      = 2.0
+            end
+            obj.Dt = DeltaTime;            
+        end % setDt
+
+        function obj = setNsteps( obj, N )
+            %--------------------------------------------------------------
+            % Set number of time steps for custom simulation
+            %
+            % obj = obj.setNsteps( N );
+            %
+            % Input Arguments:
+            %
+            % N --> (int64) Number of time steps for custom simulation
+            %--------------------------------------------------------------
+            arguments 
+                obj (1,1) ecomoInterface { mustBeNonempty( obj ) }
+                N   (1,1) int64          { mustBePositive( N ) }            = 200
+            end
+            obj.N_steps = N;
+        end % setNsteps    
+
+        function obj = setData( obj, Data )
+            %--------------------------------------------------------------
+            % Assign the Data structure. Needed when running custopm
+            % simulations.
+            %
+            % obj = obj.setData( Data );
+            %
+            % Input Arguments:
+            %
+            % Data --> (struct) Structure containing the engine operating
+            %                   data
+            %--------------------------------------------------------------
+            arguments
+                obj     (1,1) ecomoInterface 
+                Data    (1,1) struct         { mustBeNonempty( Data ) }
+            end
+            obj.Data = Data;
+        end % setData
+
         function obj = setCleanCooler( obj, State )
             %--------------------------------------------------------------
             % Define the initial state of the cooler as either clean or
@@ -83,7 +155,7 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             arguments
                 obj      (1,1) ecomoInterface { mustBeNonempty( obj ) }
-                NumCells (1,1) double         { mustBePositive( NumCells ) }  = 4.5
+                NumCells (1,1) int64         { mustBePositive( NumCells ) }  = 10
             end
             obj.NumCells = NumCells;
         end % setNumCells
@@ -598,56 +670,6 @@ classdef ecomoInterface < handle
             ylabel( Ax, "Cost Function", "FontSize", 14);
         end % plotBayesOpt
 
-        function F = runIdentifiedSimulation( obj, R, Cln )
-            %--------------------------------------------------------------
-            % Run an ECOMO model simulation with the identified parameters.
-            % If required the time series can be replicated multiple times.
-            %
-            % F = obj.runIdentifiedSimulation( R, Cln );
-            %
-            % Input Arguments:
-            %
-            % R   --> (int64) Number of times to replicate the time series.
-            %                 {0}. For example, setting R = 1 doubles the
-            %                 length of the time series. 
-            % Cln --> (logical) Set to true to run from clean tube state
-            %--------------------------------------------------------------
-            arguments
-                obj (1,1) ecomoInterface     { mustBeNonempty( obj ) }
-                R   (1,1) int64              { mustBePositive( R )}    = 0
-                Cln (1,1) logical   = false
-            end
-            %--------------------------------------------------------------
-            % Load the identified structures
-            %--------------------------------------------------------------
-            [ Fname, Path ] = uigetfile( ".mat",...
-                "Select the identification parameter file",...
-                "MultiSelect", "off");
-            Fname = fullfile( Path, Fname );
-            load( Fname, "BoundCond", "ModelPara" );
-            if Cln
-                %----------------------------------------------------------
-                % Run clean tube simulation if required
-                %----------------------------------------------------------
-                BoundCond.soot_phi0( :, 2 ) = 0;
-            end
-            %--------------------------------------------------------------
-            % Replicate the time series
-            %--------------------------------------------------------------
-            if ~isfield( BoundCond, "IN_TimeSeries" )
-                BoundCond.IN_TimeSeries = obj.Data;
-            end
-            for Q = 1:R
-                %----------------------------------------------------------
-                % Replicate the time series if necessary
-                %----------------------------------------------------------
-                BoundCond.IN_TimeSeries = ...
-                            obj.repTimeSeries( BoundCond.IN_TimeSeries );
-            end % /Q
-            F = FoulingModel( BoundCond, ModelPara );
-            F.run;
-        end
-
         function FM = exportParameters( obj ) 
             %--------------------------------------------------------------
             % Export the identified parameters to the wotkspace. Store in
@@ -999,6 +1021,8 @@ classdef ecomoInterface < handle
             PROBLEM.objective = @(X)obj.evalLikelihood( X );
             PROBLEM.x0 = obj.B.Xnext;
             Xnext = fmincon( PROBLEM );
+            %--------------------------------------------------------------
+            % 
         end % minLogLikelihood
 
         function L = evalLikelihood( obj, X )
@@ -1085,17 +1109,8 @@ classdef ecomoInterface < handle
                             Start = Finish + 1;
                             Finish = Start + S.K( Kk ) - 1;
                             K = Start:Finish;
-                            if matches( "x", S.X( Kk ) )
-                                %------------------------------------------
-                                % Knot limits for tube length are hard
-                                % coded for now
-                                %------------------------------------------
-                                Vlo = 0.10 * obj.TubeLen / 1000;
-                                Vhi = 0.90 * obj.TubeLen / 1000;
-                            else
-                                Vlo = S.Klo( Kk );
-                                Vhi = S.Khi( Kk );
-                            end
+                            Vlo = S.Klo( Kk );
+                            Vhi = S.Khi( Kk );
                             Lo( Knots( K ) ) = Vlo;
                             Hi( Knots( K ) ) = Vhi;
                         end
@@ -1103,18 +1118,8 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % One-dimensional B-spline
                         %--------------------------------------------------
-                        if matches( "x", S.X)
-                            %----------------------------------------------
-                            % These are hard coded for now
-                            %----------------------------------------------
-                            Lo( Knots ) = repmat( 0.10 * obj.TubeLen ...
-                                          / 1000, size( Knots ) );
-                            Hi( Knots ) = repmat( 0.90 * obj.TubeLen ...
-                                          / 1000, size( Knots ) );
-                        else
-                            Lo( Knots ) = repmat( S.Klo, size( Knots ) );
-                            Hi( Knots ) = repmat( S.Khi, size( Knots ) );
-                        end
+                        Lo( Knots ) = repmat( S.Klo, size( Knots ) );
+                        Hi( Knots ) = repmat( S.Khi, size( Knots ) );
                     end
                 end
             end % /Q
