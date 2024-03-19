@@ -82,7 +82,7 @@ classdef ecomoInterface < handle
             %--------------------------------------------------------------
             arguments 
                 obj       (1,1) ecomoInterface { mustBeNonempty( obj ) }
-                DeltaTime (1,1) int64  { mustBePositive( DeltaTime ) }      = 2.0
+                DeltaTime (1,1) double  { mustBePositive( DeltaTime ) }     = 2.0
             end
             obj.Dt = DeltaTime;            
         end % setDt
@@ -902,7 +902,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Temperature residual versus time
                         %--------------------------------------------------
-                        Res = obj.Data.T_g_out - FSim.T_out_L_degC.';
+                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
                         obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
                         xlabel( "Time [s]" );
                         ylabel( "Outlet Temperature Residual [^oC]" );
@@ -910,7 +910,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Temperature residual versus predicted
                         %--------------------------------------------------
-                        Res = obj.Data.T_g_out - FSim.T_out_L_degC.';
+                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
                         Yhat = FSim.T_out_L_degC;
                         obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
                         xlabel( "Predicted Outlet Temperature [^oC]");
@@ -919,7 +919,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Pressure residuals versus time
                         %--------------------------------------------------
-                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa.';
+                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
                         obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
                         xlabel( "Time [s]" );
                         ylabel( "Residual \Deltapressure [kPa]");
@@ -927,7 +927,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Pressure residuals versus predicted
                         %--------------------------------------------------
-                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa.';
+                        Res = obj.Data.deltaP - FSim.deltaPre_L_kPa;
                         Yhat = FSim.deltaPre_L_kPa;
                         obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
                         xlabel( "Predicted \Deltapressure [kPa]");
