@@ -7,7 +7,7 @@ classdef ecomoInterface < handle
         FM          (:,1) FoulingModel                                      % ECOMO fouling model object array
         IDdata      (1,1) string                                            % Name of identification data file
         B           (1,1) bayesOpt = bayesOpt( "gpr", "ucb" )               % bayesOpt object
-        Data        (1,1) struct                                            % Identification training data
+        Data        (1,:) struct                                            % Identification training data
         PNdist      (1,1) struct                                            % PN distribution data
         NumTube     (1,1) double   = 35                                     % Number of heat exchanger tubes
         DuctGeo     (1,1) string   = "Circle"                               % Duct geometry
@@ -45,7 +45,7 @@ classdef ecomoInterface < handle
         BestFM         FoulingModel                                         % Best simulation object
         Problem        string                                               % Problem type
         InitialSize    double                                               % Size of initial surrogate model training DoE
-        NumTsteps      int64                                                % Number of time time steps
+        NumTsteps      int64                                                % Number of time steps
         NumPoints      int64                                                % Number of simulation runs
     end % dependent properties
 
@@ -383,6 +383,7 @@ classdef ecomoInterface < handle
             end
             Ok = ( exist( Fname, "file" ) == 2 );
             assert( Ok, 'File "%s" not found', Fname );
+            obj.Data = struct.empty;
             obj.IDdata = Fname;
             load( obj.IDdata,  Varname );
             obj.Data = eval( Varname );
@@ -496,8 +497,8 @@ classdef ecomoInterface < handle
             % Modification by M. Cary 11/01/2024
             % Define default configuration structures
             ModPara = obj.ModelPara;                                        % Parameters
+            obj.BoundCond.IN_TimeSeries = obj.Data;                         % Overwrite here once to ensure enumeration method works
             BndCond = obj.BoundCond;                                        % Boundary conditions
-
             % Simulate new conditions, serially or in parallel.
             if obj.UseParallel 
 
@@ -508,8 +509,8 @@ classdef ecomoInterface < handle
                 %----------------------------------------------------------
                 % Run simulations in parallel.
                 %----------------------------------------------------------
-                parfor Q = 1:Nx
-%                 for Q = 1:Nx    % for debugging
+%                 parfor Q = 1:Nx
+                for Q = 1:Nx    % for debugging
 
                     Idx = N( Q );
 
@@ -540,7 +541,7 @@ classdef ecomoInterface < handle
 
                     [ModelParaTmp, BoundCondTmp] = ecomoInterface.parameterCheck( ...
                         ModPara, BndCond, SrcObj, Idx);
-                    FMarray{Q}  = ecomoInterface.runSimulation(ModelParaTmp,...
+                    FMarray{Q}  = obj.runSimulation(ModelParaTmp,...
                         BoundCondTmp );
                     SrcObj.setSimulated(Idx, true);
                 end
@@ -751,12 +752,12 @@ classdef ecomoInterface < handle
             plot( Ax( 1 ), obj.Data.t, Dtemp, 'r-', 'LineWidth', 2.0 );
             xlabel( Ax( 1 ), "Time [s]", "FontSize", 14 );
             ylabel( Ax( 1 ), '\Delta Temp [^oc]', "FontSize", 14);
-            legend( Ax( 1 ), "Data", "Model", "Location", "northoutside");
+            legend( Ax( 1 ), "Data", "Model", "Location", "southeast");
             plot( Ax( 2 ), obj.Data.t, obj.Data.deltaP, 'g-', 'LineWidth', 2.0 );
             plot( Ax( 2 ), obj.Data.t, Dpress, 'r-', 'LineWidth', 2.0 );
             xlabel( Ax( 2 ), "Time [s]", "FontSize", 14 );
             ylabel( Ax( 2 ), '\Delta Pressure [kPa]', "FontSize", 14);
-            legend( Ax( 2 ), "Data", "Model", "Location", "northoutside");
+            legend( Ax( 2 ), "Data", "Model", "Location", "southeast");
             plot( Ax( 3 ), obj.Data.t, RPM,  'k-', 'LineWidth', 2.0 );
             xlabel( Ax( 3 ), "Time [s]", "FontSize", 14 );
             ylabel( Ax( 3 ), 'Engine Speed [RPM]', "FontSize", 14);
@@ -902,7 +903,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Temperature residual versus time
                         %--------------------------------------------------
-                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
+                        Res = obj.Data.T_g_out_ECM - FSim.T_out_L_degC;
                         obj.plotResidualsVstime( obj.Data.t, Res, Ax( Q ) );
                         xlabel( "Time [s]" );
                         ylabel( "Outlet Temperature Residual [^oC]" );
@@ -910,7 +911,7 @@ classdef ecomoInterface < handle
                         %--------------------------------------------------
                         % Temperature residual versus predicted
                         %--------------------------------------------------
-                        Res = obj.Data.T_g_out - FSim.T_out_L_degC;
+                        Res = obj.Data.T_g_out_ECM - FSim.T_out_L_degC;
                         Yhat = FSim.T_out_L_degC;
                         obj.plotResidualVsPredicted( Yhat, Res, Ax( Q ));
                         xlabel( "Predicted Outlet Temperature [^oC]");
@@ -1058,6 +1059,7 @@ classdef ecomoInterface < handle
             obj.B = obj.B.conDataCoding( Lo, Hi );
             obj.B = obj.B.setTrainingData( X, Res(:) );
         end % exportData
+
     end % protected methods
 
     methods ( Access = private ) 
@@ -1136,6 +1138,21 @@ classdef ecomoInterface < handle
     end % private methods
 
     methods ( Access = protected, Static = true )
+        function FM = runSimulation( ModelPara, BoundCond )
+            %--------------------------------------------------------------
+            % Run an ECOMO simulation
+            %
+            % FM = obj.runSimulation( ModelPara, BoundCond );
+            %
+            % Input Arguments:
+            %
+            % ModelPara --> (struct) Simulation model 
+            % BoundCond --> (struct) Initial conditions
+            %--------------------------------------------------------------
+            FM = FoulingModel( BoundCond, ModelPara );                      % Define the simulation object
+            FM.run();                                                       % Run the simulation
+        end % runSimulation   
+
         function plotResidualVsPredicted( Yhat, Res, Ax)
             %--------------------------------------------------------------
             % Plot residuals versus the predicted value
@@ -1192,21 +1209,6 @@ classdef ecomoInterface < handle
                 S.( Fnames( Q ) ) = D;
             end % /Q
         end
-
-        function FM = runSimulation( ModelPara, BoundCond )
-            %--------------------------------------------------------------
-            % Run an ECOMO simulation
-            %
-            % FM = ecomoInterface.runSimulation( ModelPara, BoundCond );
-            %
-            % Input Arguments:
-            %
-            % ModelPara --> (struct) Simulation model 
-            % BoundCond --> (struct) Initial conditions
-            %--------------------------------------------------------------
-            FM = FoulingModel( BoundCond, ModelPara );                      % Define the simulation object
-            FM.run();                                                       % Run the simulation
-        end % runSimulation
 
         function [ P, Bc ] = parameterCheck( M, B, S, R )
             %--------------------------------------------------------------
